@@ -4,7 +4,10 @@ import {
   Check,
   CircleAlert,
   Copy,
+  Eye,
+  EyeOff,
   ExternalLink,
+  KeyRound,
   RefreshCw,
   RotateCcw,
   ScanSearch,
@@ -16,6 +19,11 @@ import {
 } from "lucide-react";
 import { detectFirmware, flashErrorMessage, flashFirmware, supportsWebSerial } from "./flasher";
 import {
+  pairingErrorMessage,
+  retrieveBridgePairing,
+  type BridgePairingCredential,
+} from "./pairing";
+import {
   formatBytes,
   loadFirmwareCatalog,
   type FirmwareCatalog,
@@ -23,12 +31,17 @@ import {
   type FirmwareTarget,
 } from "./firmware";
 
-type Phase = "prepare" | "detecting" | "flashing" | "complete" | "error";
+type Phase = "prepare" | "detecting" | "pairing" | "flashing" | "complete" | "error";
 type SiteTab = "home" | "flash";
 type DetectionState = {
   status: "idle" | "detecting" | "bridge" | "official" | "unknown" | "error";
   detail: string;
   version?: string;
+};
+type PairingState = {
+  status: "idle" | "requesting" | "ready" | "error";
+  detail: string;
+  credential?: BridgePairingCredential;
 };
 
 const bootSteps = [
@@ -57,14 +70,33 @@ export default function App() {
     status: "idle",
     detail: "Check the installed firmware without writing to the board.",
   });
+  const [pairing, setPairing] = useState<PairingState>({
+    status: "idle",
+    detail: "Retrieve the protected iPhone pairing credential from a running Bridge.",
+  });
+  const [authRevealed, setAuthRevealed] = useState(false);
+  const [authCopied, setAuthCopied] = useState(false);
   const compatible = typeof window !== "undefined" && supportsWebSerial();
-  const busy = phase === "detecting" || phase === "flashing";
+  const busy = phase === "detecting" || phase === "pairing" || phase === "flashing";
 
   useEffect(() => {
     const updateTab = () => setTab(tabFromPath());
     window.addEventListener("popstate", updateTab);
     return () => window.removeEventListener("popstate", updateTab);
   }, []);
+
+  useEffect(() => {
+    if (!authRevealed) return;
+    const hideAuth = () => {
+      if (document.hidden) setAuthRevealed(false);
+    };
+    const timer = window.setTimeout(() => setAuthRevealed(false), 15_000);
+    document.addEventListener("visibilitychange", hideAuth);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", hideAuth);
+    };
+  }, [authRevealed]);
 
   useEffect(() => {
     loadFirmwareCatalog()
@@ -156,6 +188,67 @@ export default function App() {
     }
   };
 
+  const startPairing = async () => {
+    if (!compatible || busy) return;
+    setPhase("pairing");
+    setProgress(0);
+    setError(null);
+    setAuthRevealed(false);
+    setAuthCopied(false);
+    setPairing({ status: "requesting", detail: "Waiting for physical confirmation on the Bridge." });
+    setLogs([
+      "Bridge auth retrieval started.",
+      "Waiting for BOOT-button confirmation; credential contents will not be logged.",
+    ]);
+
+    try {
+      const credential = await retrieveBridgePairing({
+        onProgress: (value, detail) => {
+          setProgress(value);
+          setProgressDetail(detail);
+          setPairing((current) => ({ ...current, detail }));
+        },
+        onDeviceLost: () => appendLog("Bridge runtime port disconnected."),
+      });
+      setPairing({
+        status: "ready",
+        detail: "Ready to copy into Flipforge on iPhone. It is not saved by this website.",
+        credential,
+      });
+      setProgress(1);
+      setProgressDetail("Bridge auth received securely");
+      appendLog("Bridge auth received. Secret remains masked and is held in memory only.");
+    } catch (reason) {
+      const message = pairingErrorMessage(reason);
+      setPairing({ status: "error", detail: message });
+      setProgressDetail("Bridge auth retrieval stopped");
+      appendLog(`ERROR  ${message}`);
+    } finally {
+      setPhase("prepare");
+    }
+  };
+
+  const copyBridgeAuth = async () => {
+    const credential = pairing.credential;
+    if (!credential) return;
+    try {
+      await navigator.clipboard.writeText(credential.pairingLine);
+      setAuthCopied(true);
+      window.setTimeout(() => setAuthCopied(false), 1_600);
+    } catch {
+      setPairing((current) => ({ ...current, detail: "Copy failed. Reveal the credential and copy it manually." }));
+    }
+  };
+
+  const clearBridgeAuth = () => {
+    setAuthRevealed(false);
+    setAuthCopied(false);
+    setPairing({
+      status: "idle",
+      detail: "Retrieve the protected iPhone pairing credential from a running Bridge.",
+    });
+  };
+
   const startFlash = async () => {
     if (!selected || !confirmed || !compatible || busy) return;
     setPhase("flashing");
@@ -208,6 +301,8 @@ export default function App() {
   const stateLabel =
     phase === "detecting"
       ? "Detecting firmware"
+      : phase === "pairing"
+        ? "Getting Bridge auth"
       : phase === "flashing"
         ? "Writing firmware"
       : phase === "complete"
@@ -216,14 +311,18 @@ export default function App() {
           ? "Stopped"
           : catalogError
             ? "Catalog error"
-            : detection.status === "bridge"
-              ? "Forge detected"
-              : detection.status === "official"
-                ? "Stock detected"
-                : detection.status === "unknown"
-                  ? "Unknown firmware"
-                  : detection.status === "error"
-                    ? "Detection stopped"
+            : pairing.status === "ready"
+              ? "Bridge auth ready"
+              : pairing.status === "error"
+                ? "Auth stopped"
+                : detection.status === "bridge"
+                  ? "Forge detected"
+                  : detection.status === "official"
+                    ? "Stock detected"
+                    : detection.status === "unknown"
+                      ? "Unknown firmware"
+                      : detection.status === "error"
+                        ? "Detection stopped"
             : "Ready";
 
   return (
@@ -265,6 +364,18 @@ export default function App() {
                 compatible={compatible}
                 disabled={busy}
                 onDetect={startDetection}
+              />
+
+              <BridgeAuthPanel
+                pairing={pairing}
+                revealed={authRevealed}
+                copied={authCopied}
+                compatible={compatible}
+                disabled={busy}
+                onRetrieve={startPairing}
+                onCopy={copyBridgeAuth}
+                onToggleReveal={() => setAuthRevealed((current) => !current)}
+                onClear={clearBridgeAuth}
               />
 
               <div className="block-label firmware-label"><Zap /> CHOOSE FIRMWARE TO INSTALL</div>
@@ -518,6 +629,79 @@ function FirmwareDetector({
   );
 }
 
+function BridgeAuthPanel({
+  pairing,
+  revealed,
+  copied,
+  compatible,
+  disabled,
+  onRetrieve,
+  onCopy,
+  onToggleReveal,
+  onClear,
+}: {
+  pairing: PairingState;
+  revealed: boolean;
+  copied: boolean;
+  compatible: boolean;
+  disabled: boolean;
+  onRetrieve: () => void;
+  onCopy: () => void;
+  onToggleReveal: () => void;
+  onClear: () => void;
+}) {
+  const credential = pairing.credential;
+  const label =
+    pairing.status === "requesting"
+      ? "Waiting for the Bridge…"
+      : pairing.status === "ready"
+        ? "Auth ready"
+        : pairing.status === "error"
+          ? "Could not retrieve auth"
+          : "Get Bridge auth";
+  const maskedCredential = credential
+    ? `FFPAIR1 ${credential.ssid} •••••••••••••••• ••••••••••••••••••••••••••••••••`
+    : "";
+
+  return (
+    <section className={`bridge-auth auth-${pairing.status}`} aria-label="Wi-Fi Bridge authentication">
+      <div className="auth-heading">
+        <span className="auth-icon"><KeyRound /></span>
+        <div>
+          <small>WI-FI BRIDGE AUTH</small>
+          <strong>{label}</strong>
+          <p>{pairing.detail}</p>
+        </div>
+      </div>
+
+      {credential ? (
+        <>
+          <code className={revealed ? "revealed" : "masked"} aria-label={revealed ? "Revealed Bridge pairing credential" : "Masked Bridge pairing credential"}>
+            {revealed ? credential.pairingLine : maskedCredential}
+          </code>
+          <div className="auth-actions">
+            <button className="auth-primary" onClick={onCopy}>{copied ? <Check /> : <Copy />}{copied ? "Copied" : "Copy auth"}</button>
+            <button onClick={onToggleReveal}>{revealed ? <EyeOff /> : <Eye />}{revealed ? "Hide" : "Reveal 15s"}</button>
+            <button onClick={onClear}>Clear</button>
+          </div>
+          <p className="auth-note"><ShieldCheck /> Copy includes the full credential even while it stays masked on screen.</p>
+        </>
+      ) : (
+        <>
+          <div className="auth-instruction">
+            <span>1</span>
+            <p>Run Bridge firmware, hold BOOT for two seconds, and keep holding it.</p>
+          </div>
+          <button className="auth-retrieve" onClick={onRetrieve} disabled={!compatible || disabled}>
+            <KeyRound />{pairing.status === "requesting" ? "Getting auth…" : "Get Bridge auth"}
+          </button>
+          <p className="auth-note"><ShieldCheck /> Local USB only. Nothing is uploaded or saved by this site.</p>
+        </>
+      )}
+    </section>
+  );
+}
+
 function ConsolePane({
   state,
   phase,
@@ -534,7 +718,7 @@ function ConsolePane({
   catalogError: string | null;
 }) {
   const visibleLogs = logs.length ? logs.slice(-14) : ["Loading verified firmware catalog…"];
-  const stateClass = phase === "complete" ? "success" : phase === "error" || catalogError ? "error" : phase === "flashing" || phase === "detecting" ? "active" : "";
+  const stateClass = phase === "complete" ? "success" : phase === "error" || catalogError ? "error" : phase === "flashing" || phase === "detecting" || phase === "pairing" ? "active" : "";
 
   return (
     <section className="console-pane" aria-label="Flash console" aria-live="polite">
@@ -553,7 +737,7 @@ function ConsolePane({
         {visibleLogs.map((line, index) => (
           <code key={`${index}-${line}`}><span>›</span>{line}</code>
         ))}
-        {(phase === "flashing" || phase === "detecting") && <span className="console-cursor" />}
+        {(phase === "flashing" || phase === "detecting" || phase === "pairing") && <span className="console-cursor" />}
       </div>
       <div className="console-foot">
         <span>USB / LOCAL</span>
