@@ -31,9 +31,10 @@ import {
   type FirmwareId,
   type FirmwareTarget,
 } from "./firmware";
+import BadKBBuilder from "./components/BadKBBuilder";
 
 type Phase = "prepare" | "detecting" | "pairing" | "flashing" | "complete" | "error";
-type SiteTab = "home" | "flash";
+type SiteTab = "home" | "flash" | "badkb";
 type DetectionState = {
   status: "idle" | "detecting" | "bridge" | "official" | "unknown" | "error";
   detail: string;
@@ -65,6 +66,7 @@ const bootSteps = [
 ];
 
 function tabFromPath(): SiteTab {
+  if (window.location.pathname.startsWith("/badkb")) return "badkb";
   return window.location.pathname.startsWith("/flash") ? "flash" : "home";
 }
 
@@ -235,7 +237,7 @@ export default function App() {
   const percent = Math.round(progress * 100);
 
   const navigate = (nextTab: SiteTab) => {
-    const path = nextTab === "flash" ? "/flash" : "/";
+    const path = nextTab === "flash" ? "/flash" : nextTab === "badkb" ? "/badkb" : "/";
     if (window.location.pathname !== path) window.history.pushState({}, "", path);
     setTab(nextTab);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -452,6 +454,8 @@ export default function App() {
 
       {tab === "home" ? (
         <HomePage onOpenFlash={() => navigate("flash")} />
+      ) : tab === "badkb" ? (
+        <BadKBBuilder />
       ) : (
         <main className="flash-page">
           <section className="flash-intro">
@@ -591,9 +595,10 @@ export default function App() {
 }
 
 function SiteHeader({ tab, compatible, onNavigate }: { tab: SiteTab; compatible: boolean; onNavigate: (tab: SiteTab) => void }) {
+  const pathForTab = (target: SiteTab) => target === "flash" ? "/flash" : target === "badkb" ? "/badkb" : "/";
   const link = (target: SiteTab, label: string) => (
     <a
-      href={target === "home" ? "/" : "/flash"}
+      href={pathForTab(target)}
       className={tab === target ? "active" : ""}
       aria-current={tab === target ? "page" : undefined}
       onClick={(event) => { event.preventDefault(); onNavigate(target); }}
@@ -611,10 +616,11 @@ function SiteHeader({ tab, compatible, onNavigate }: { tab: SiteTab; compatible:
       <nav aria-label="Primary navigation">
         {link("home", "HOME")}
         {link("flash", "FLASH")}
+        {link("badkb", "BADKB")}
       </nav>
       <div className="topbar-status">
-        <span className={`status-dot ${compatible ? "ready" : ""}`} />
-        {compatible ? "SERIAL READY" : "DESKTOP REQUIRED"}
+        <span className={`status-dot ${tab === "badkb" || compatible ? "ready" : ""}`} />
+        {tab === "badkb" ? "LOCAL BUILDER" : compatible ? "SERIAL READY" : "DESKTOP REQUIRED"}
       </div>
     </header>
   );
@@ -945,7 +951,7 @@ function SiteFooter() {
   return (
     <footer className="site-footer">
       <span><ShieldCheck /> LOCAL-FIRST</span>
-      <p>No firmware or serial data is uploaded to Flipforge.</p>
+      <p>No firmware, serial data, or scripts are uploaded to Flipforge.</p>
       <a href="https://github.com/Flipforge-Software/flipforge-web" target="_blank" rel="noreferrer">SOURCE <ExternalLink /></a>
     </footer>
   );
