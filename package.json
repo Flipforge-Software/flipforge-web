@@ -14,8 +14,6 @@
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
-    "@fontsource-variable/dm-sans": "^5.2.8",
-    "@fontsource-variable/space-grotesk": "^5.2.8",
     "esptool-js": "0.6.1",
     "lucide-react": "^0.468.0",
     "react": "19.2.8",

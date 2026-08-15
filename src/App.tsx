@@ -11,8 +11,8 @@ import {
   Terminal,
   Usb,
   Wifi,
+  Zap,
 } from "lucide-react";
-import { BoardIllustration } from "./components/BoardIllustration";
 import { flashErrorMessage, flashFirmware, supportsWebSerial } from "./flasher";
 import {
   formatBytes,
@@ -23,6 +23,7 @@ import {
 } from "./firmware";
 
 type Phase = "prepare" | "flashing" | "complete" | "error";
+type SiteTab = "home" | "flash";
 
 const bootSteps = [
   "Remove the Wi-Fi Devboard from your Flipper.",
@@ -30,7 +31,12 @@ const bootSteps = [
   "Hold BOOT, tap RESET, then release BOOT.",
 ];
 
+function tabFromPath(): SiteTab {
+  return window.location.pathname.startsWith("/flash") ? "flash" : "home";
+}
+
 export default function App() {
+  const [tab, setTab] = useState<SiteTab>(tabFromPath);
   const [catalog, setCatalog] = useState<FirmwareCatalog | null>(null);
   const [selectedId, setSelectedId] = useState<FirmwareId>("bridge");
   const [phase, setPhase] = useState<Phase>("prepare");
@@ -42,6 +48,12 @@ export default function App() {
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const compatible = typeof window !== "undefined" && supportsWebSerial();
+
+  useEffect(() => {
+    const updateTab = () => setTab(tabFromPath());
+    window.addEventListener("popstate", updateTab);
+    return () => window.removeEventListener("popstate", updateTab);
+  }, []);
 
   useEffect(() => {
     loadFirmwareCatalog()
@@ -63,6 +75,13 @@ export default function App() {
 
   const totalSize = selected?.segments.reduce((sum, segment) => sum + segment.size, 0) ?? 0;
   const percent = Math.round(progress * 100);
+
+  const navigate = (nextTab: SiteTab) => {
+    const path = nextTab === "flash" ? "/flash" : "/";
+    if (window.location.pathname !== path) window.history.pushState({}, "", path);
+    setTab(nextTab);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const chooseMode = (id: FirmwareId) => {
     if (phase === "flashing") return;
@@ -141,137 +160,202 @@ export default function App() {
             : "Ready";
 
   return (
-    <main className="app" id="top">
-      <header className="topbar">
-        <a className="wordmark" href="#top" aria-label="Flipforge home">
-          <span className="wordmark-mark">FF</span>
-          <span>FLIPFORGE</span>
-        </a>
-        <div className="topbar-status">
-          <span className={`status-dot ${compatible ? "ready" : ""}`} />
-          {compatible ? "WEB SERIAL READY" : "COMPUTER BROWSER REQUIRED"}
-        </div>
-        <a className="source-link" href="https://github.com/Flipforge-Software/flipforge-web" target="_blank" rel="noreferrer">
-          SOURCE <ExternalLink />
-        </a>
-      </header>
+    <div className={`site site-${tab}`}>
+      <SiteHeader tab={tab} compatible={compatible} onNavigate={navigate} />
 
-      <div className="workspace">
-        <section className="workspace-intro">
-          <div>
-            <p className="eyebrow">WI-FI DEVBOARD UTILITY</p>
-            <h1>Flash or restore your board.</h1>
-            <p>Install the Flipforge mobile bridge or return to the original Flipper firmware.</p>
-          </div>
-          <div className="intro-board" aria-hidden="true">
-            <BoardIllustration active={phase === "flashing"} />
-          </div>
-        </section>
-
-        <div className="utility-grid">
-          <section className="setup-pane" aria-labelledby="setup-title">
-            <div className="pane-heading">
-              <span>SETUP</span>
-              <h2 id="setup-title">Choose firmware</h2>
-            </div>
-
-            <div className="mode-switch" aria-label="Firmware mode">
-              <ModeButton
-                target={catalog?.targets.find((target) => target.id === "bridge")}
-                selected={selectedId === "bridge"}
-                icon={<Wifi />}
-                fallbackName="Flipforge Bridge"
-                onClick={() => chooseMode("bridge")}
-                disabled={phase === "flashing"}
-              />
-              <ModeButton
-                target={catalog?.targets.find((target) => target.id === "official")}
-                selected={selectedId === "official"}
-                icon={<RotateCcw />}
-                fallbackName="Original Firmware"
-                onClick={() => chooseMode("official")}
-                disabled={phase === "flashing"}
-              />
-            </div>
-
-            <div className="firmware-meta">
-              <span><b>VERSION</b>{selected ? selected.version : "—"}</span>
-              <span><b>DOWNLOAD</b>{selected ? formatBytes(totalSize) : "—"}</span>
-              <span><b>CHIP</b>ESP32-S2</span>
-              <span><b>SOURCE</b>{selected?.sourceName ?? "—"}</span>
-            </div>
-
-            <div className="step-block">
-              <div className="block-label"><Usb /> CONNECT THE BOARD</div>
-              <ol className="boot-steps">
-                {bootSteps.map((step, index) => (
-                  <li key={step}>
-                    <span>{index + 1}</span>
-                    <p>{step}</p>
-                  </li>
-                ))}
-              </ol>
-            </div>
-
-            {phase === "complete" && (
-              <div className="result-message success" role="status">
-                <Check />
-                <div><strong>Firmware verified.</strong><span>Press RESET on the board to start it.</span></div>
-              </div>
-            )}
-
-            {phase === "error" && (
-              <div className="result-message error" role="alert">
-                <CircleAlert />
-                <div><strong>Flash stopped.</strong><span>{error}</span></div>
-              </div>
-            )}
-
-            {!compatible ? (
-              <div className="browser-handoff">
-                <strong>Open this page in desktop Chrome or Edge.</strong>
-                <span>iPhone and iPad do not expose the serial connection used by the board bootloader.</span>
-                <button onClick={copyLink}>{copied ? <Check /> : <Copy />}{copied ? "Link copied" : "Copy link"}</button>
-              </div>
-            ) : phase === "complete" || phase === "error" ? (
-              <button className="secondary-action" onClick={resetWorkflow}><RefreshCw /> Start again</button>
-            ) : (
-              <>
-                <label className="confirmation">
-                  <input
-                    type="checkbox"
-                    checked={confirmed}
-                    onChange={(event) => setConfirmed(event.target.checked)}
-                    disabled={phase === "flashing"}
-                  />
-                  <span className="check-box"><Check /></span>
-                  <span>I completed all three steps</span>
-                </label>
-                <button className="primary-action" onClick={startFlash} disabled={!selected || !confirmed || phase === "flashing" || Boolean(catalogError)}>
-                  {phase === "flashing" ? "Flashing…" : `Connect & flash ${selected?.shortName ?? "firmware"}`}
-                  <ArrowRight />
-                </button>
-                <p className="action-note"><ShieldCheck /> Firmware is verified before anything is written.</p>
-              </>
-            )}
+      {tab === "home" ? (
+        <HomePage onOpenFlash={() => navigate("flash")} />
+      ) : (
+        <main className="flash-page">
+          <section className="flash-intro">
+            <p className="eyebrow">DEVBOARD UTILITY</p>
+            <h1>Flash your Wi-Fi Devboard.</h1>
+            <p>Install the mobile bridge or restore the original Flipper firmware.</p>
           </section>
 
-          <ConsolePane
-            state={stateLabel}
-            phase={phase}
-            percent={percent}
-            detail={progressDetail}
-            logs={logs}
-            catalogError={catalogError}
-          />
-        </div>
+          <div className="utility-grid">
+            <section className="setup-pane" aria-labelledby="setup-title">
+              <div className="pane-heading">
+                <span>SETUP</span>
+                <h2 id="setup-title">Choose firmware</h2>
+              </div>
 
-        <footer>
-          <span><ShieldCheck /> LOCAL USB FLASHING</span>
-          <p>No firmware or serial data is uploaded to Flipforge.</p>
-          <p>Use only with the official ESP32-S2 Wi-Fi Devboard.</p>
-        </footer>
+              <div className="mode-switch" aria-label="Firmware mode">
+                <ModeButton
+                  target={catalog?.targets.find((target) => target.id === "bridge")}
+                  selected={selectedId === "bridge"}
+                  icon={<Wifi />}
+                  fallbackName="Flipforge Bridge"
+                  onClick={() => chooseMode("bridge")}
+                  disabled={phase === "flashing"}
+                />
+                <ModeButton
+                  target={catalog?.targets.find((target) => target.id === "official")}
+                  selected={selectedId === "official"}
+                  icon={<RotateCcw />}
+                  fallbackName="Original Firmware"
+                  onClick={() => chooseMode("official")}
+                  disabled={phase === "flashing"}
+                />
+              </div>
+
+              <div className="firmware-meta">
+                <span><b>VERSION</b>{selected ? selected.version : "—"}</span>
+                <span><b>DOWNLOAD</b>{selected ? formatBytes(totalSize) : "—"}</span>
+                <span><b>CHIP</b>ESP32-S2</span>
+                <span><b>SOURCE</b>{selected?.sourceName ?? "—"}</span>
+              </div>
+
+              <div className="step-block">
+                <div className="block-label"><Usb /> CONNECT THE BOARD</div>
+                <ol className="boot-steps">
+                  {bootSteps.map((step, index) => (
+                    <li key={step}>
+                      <span>{index + 1}</span>
+                      <p>{step}</p>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
+              {phase === "complete" && (
+                <div className="result-message success" role="status">
+                  <Check />
+                  <div><strong>Firmware verified.</strong><span>Press RESET on the board to start it.</span></div>
+                </div>
+              )}
+
+              {phase === "error" && (
+                <div className="result-message error" role="alert">
+                  <CircleAlert />
+                  <div><strong>Flash stopped.</strong><span>{error}</span></div>
+                </div>
+              )}
+
+              {!compatible ? (
+                <div className="browser-handoff">
+                  <strong>Open this page in desktop Chrome or Edge.</strong>
+                  <span>iPhone and iPad do not expose the serial connection used by the board bootloader.</span>
+                  <button onClick={copyLink}>{copied ? <Check /> : <Copy />}{copied ? "Link copied" : "Copy link"}</button>
+                </div>
+              ) : phase === "complete" || phase === "error" ? (
+                <button className="secondary-action" onClick={resetWorkflow}><RefreshCw /> Start again</button>
+              ) : (
+                <>
+                  <label className="confirmation">
+                    <input
+                      type="checkbox"
+                      checked={confirmed}
+                      onChange={(event) => setConfirmed(event.target.checked)}
+                      disabled={phase === "flashing"}
+                    />
+                    <span className="check-box"><Check /></span>
+                    <span>I completed all three steps</span>
+                  </label>
+                  <button className="primary-action" onClick={startFlash} disabled={!selected || !confirmed || phase === "flashing" || Boolean(catalogError)}>
+                    {phase === "flashing" ? "Flashing…" : `Connect & flash ${selected?.shortName ?? "firmware"}`}
+                    <ArrowRight />
+                  </button>
+                  <p className="action-note"><ShieldCheck /> Firmware is verified before anything is written.</p>
+                </>
+              )}
+            </section>
+
+            <ConsolePane
+              state={stateLabel}
+              phase={phase}
+              percent={percent}
+              detail={progressDetail}
+              logs={logs}
+              catalogError={catalogError}
+            />
+          </div>
+        </main>
+      )}
+
+      <SiteFooter />
+    </div>
+  );
+}
+
+function SiteHeader({ tab, compatible, onNavigate }: { tab: SiteTab; compatible: boolean; onNavigate: (tab: SiteTab) => void }) {
+  const link = (target: SiteTab, label: string) => (
+    <a
+      href={target === "home" ? "/" : "/flash"}
+      className={tab === target ? "active" : ""}
+      aria-current={tab === target ? "page" : undefined}
+      onClick={(event) => { event.preventDefault(); onNavigate(target); }}
+    >
+      {label}
+    </a>
+  );
+
+  return (
+    <header className="topbar">
+      <a className="wordmark" href="/" onClick={(event) => { event.preventDefault(); onNavigate("home"); }} aria-label="Flipforge home">
+        <span className="wordmark-mark">FF</span>
+        <span>FLIPFORGE</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        {link("home", "HOME")}
+        {link("flash", "FLASH")}
+      </nav>
+      <div className="topbar-status">
+        <span className={`status-dot ${compatible ? "ready" : ""}`} />
+        {compatible ? "SERIAL READY" : "DESKTOP REQUIRED"}
       </div>
+    </header>
+  );
+}
+
+function HomePage({ onOpenFlash }: { onOpenFlash: () => void }) {
+  return (
+    <main className="home-page">
+      <section className="home-hero">
+        <div className="hero-copy">
+          <p className="lcd-kicker">FLIPFORGE BRIDGE / READY</p>
+          <h1>Your Flipper.<br />More connected.</h1>
+          <p>Use the Wi-Fi Devboard as a private local bridge to Flipforge, then restore the original firmware whenever you want.</p>
+          <div className="hero-actions">
+            <button className="hero-primary" onClick={onOpenFlash}>OPEN FLASHER <ArrowRight /></button>
+            <a href="#how">HOW IT WORKS</a>
+          </div>
+        </div>
+        <div className="device-stage">
+          <div className="screen-message" aria-hidden="true">
+            <span>FLIPFORGE</span>
+            <strong>READY</strong>
+            <i>•••</i>
+          </div>
+          <img src="/assets/flipper-device.png" alt="Flipper Zero running the Flipforge bridge" />
+          <span className="device-shadow" />
+        </div>
+        <div className="hero-ticker" aria-hidden="true">
+          <span>LOCAL WI-FI</span><i />
+          <span>FAST TRANSFERS</span><i />
+          <span>ONE-CLICK RESTORE</span>
+        </div>
+      </section>
+
+      <section className="home-proof" id="how">
+        <div className="proof-heading">
+          <p className="eyebrow">ONE BOARD / TWO MODES</p>
+          <h2>Connected when you want it.<br />Original when you need it.</h2>
+        </div>
+        <div className="proof-steps">
+          <article><span>01</span><Wifi /><h3>Install Bridge</h3><p>Flash the board from Chrome or Edge over USB.</p></article>
+          <article><span>02</span><Zap /><h3>Pair Locally</h3><p>Connect Flipforge to your board over its private Wi-Fi link.</p></article>
+          <article><span>03</span><RotateCcw /><h3>Restore Anytime</h3><p>Return to Flipper’s original Blackmagic firmware from the same tool.</p></article>
+        </div>
+      </section>
+
+      <section className="home-cta">
+        <div>
+          <p className="lcd-kicker">ESP32-S2 / USB</p>
+          <h2>Ready to connect?</h2>
+        </div>
+        <button onClick={onOpenFlash}>FLASH YOUR DEVBOARD <ArrowRight /></button>
+      </section>
     </main>
   );
 }
@@ -342,5 +426,15 @@ function ConsolePane({
         <span>SHA-256 VERIFIED</span>
       </div>
     </section>
+  );
+}
+
+function SiteFooter() {
+  return (
+    <footer className="site-footer">
+      <span><ShieldCheck /> LOCAL-FIRST</span>
+      <p>No firmware or serial data is uploaded to Flipforge.</p>
+      <a href="https://github.com/Flipforge-Software/flipforge-web" target="_blank" rel="noreferrer">SOURCE <ExternalLink /></a>
+    </footer>
   );
 }
