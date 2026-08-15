@@ -44,10 +44,18 @@ type PairingState = {
   detail: string;
   credential?: BridgePairingCredential;
 };
+type BridgePortOption = {
+  id: string;
+  label: string;
+  detail: string;
+  port: SerialPort;
+};
 type BridgePortState = {
   status: "checking" | "detected" | "multiple" | "not-found" | "unsupported";
   detail: string;
   port?: SerialPort;
+  options: BridgePortOption[];
+  selectedId?: string;
 };
 
 const bootSteps = [
@@ -58,6 +66,23 @@ const bootSteps = [
 
 function tabFromPath(): SiteTab {
   return window.location.pathname.startsWith("/flash") ? "flash" : "home";
+}
+
+function formatUSBIdentifier(value: number | undefined): string {
+  return value === undefined ? "----" : value.toString(16).toUpperCase().padStart(4, "0");
+}
+
+function makeBridgePortOptions(ports: SerialPort[]): BridgePortOption[] {
+  return ports.map((port, index) => {
+    const info = port.getInfo();
+    const usbIdentifier = `${formatUSBIdentifier(info.usbVendorId)}:${formatUSBIdentifier(info.usbProductId)}`;
+    return {
+      id: `${usbIdentifier}-${index}`,
+      label: ports.length === 1 ? "ESP32-S2 USB board" : `USB board ${index + 1}`,
+      detail: `USB ${usbIdentifier}`,
+      port,
+    };
+  });
 }
 
 export default function App() {
@@ -83,6 +108,7 @@ export default function App() {
   const [bridgePort, setBridgePort] = useState<BridgePortState>({
     status: "checking",
     detail: "Looking for a previously approved USB board…",
+    options: [],
   });
   const [authRevealed, setAuthRevealed] = useState(false);
   const [authCopied, setAuthCopied] = useState(false);
@@ -94,6 +120,7 @@ export default function App() {
       setBridgePort({
         status: "unsupported",
         detail: "Open this page in desktop Chrome or Edge to connect over USB.",
+        options: [],
       });
       return;
     }
@@ -102,34 +129,56 @@ export default function App() {
       status: "checking",
       detail: "Looking for a previously approved USB board…",
       port: current.port,
+      options: current.options,
+      selectedId: current.selectedId,
     }));
 
     try {
       const ports = await findAuthorizedBridgePorts();
-      if (ports.length === 1) {
+      const options = makeBridgePortOptions(ports);
+      if (options.length === 1) {
         setBridgePort({
           status: "detected",
-          detail: "USB board found. You will not need to choose a port again.",
-          port: ports[0],
+          detail: `${options[0].detail} found and selected automatically.`,
+          port: options[0].port,
+          options,
+          selectedId: options[0].id,
         });
-      } else if (ports.length > 1) {
+      } else if (options.length > 1) {
         setBridgePort({
           status: "multiple",
-          detail: "More than one approved board is connected. Choose the Bridge when asked.",
+          detail: "More than one approved board is connected. Choose one below.",
+          options,
         });
       } else {
         setBridgePort({
           status: "not-found",
           detail: "No approved board found. Connect it and choose it once.",
+          options: [],
         });
       }
     } catch {
       setBridgePort({
         status: "not-found",
         detail: "USB detection was blocked. Reconnect the board, then scan again.",
+        options: [],
       });
     }
   }, [compatible]);
+
+  const selectBridgePort = (id: string) => {
+    setBridgePort((current) => {
+      const option = current.options.find((candidate) => candidate.id === id);
+      if (!option) return current;
+      return {
+        ...current,
+        status: "detected",
+        detail: `${option.label} selected. Flipforge will use it automatically.`,
+        port: option.port,
+        selectedId: option.id,
+      };
+    });
+  };
 
   useEffect(() => {
     const updateTab = () => setTab(tabFromPath());
@@ -447,6 +496,7 @@ export default function App() {
                 disabled={busy}
                 onRetrieve={startPairing}
                 onRescan={() => void scanForBridge()}
+                onSelectPort={selectBridgePort}
                 onCopy={copyBridgeAuth}
                 onToggleReveal={() => setAuthRevealed((current) => !current)}
                 onClear={clearBridgeAuth}
@@ -712,6 +762,7 @@ function BridgeAuthPanel({
   disabled,
   onRetrieve,
   onRescan,
+  onSelectPort,
   onCopy,
   onToggleReveal,
   onClear,
@@ -724,6 +775,7 @@ function BridgeAuthPanel({
   disabled: boolean;
   onRetrieve: () => void;
   onRescan: () => void;
+  onSelectPort: (id: string) => void;
   onCopy: () => void;
   onToggleReveal: () => void;
   onClear: () => void;
@@ -752,6 +804,8 @@ function BridgeAuthPanel({
       ? "Reading protected key…"
       : bridgePort.status === "detected"
         ? "Get auth from detected board"
+        : bridgePort.status === "multiple"
+          ? "Choose a board above"
         : "Choose Bridge and get auth";
   const maskedCredential = credential
     ? `FFPAIR1 ${credential.ssid} •••••••••••••••• ••••••••••••••••••••••••••••••••`
@@ -770,7 +824,7 @@ function BridgeAuthPanel({
 
       {credential ? (
         <>
-          <code className={revealed ? "revealed" : "masked"} aria-label={revealed ? "Revealed Bridge pairing credential" : "Masked Bridge pairing credential"}>
+          <code className={`auth-credential ${revealed ? "revealed" : "masked"}`} aria-label={revealed ? "Revealed Bridge pairing credential" : "Masked Bridge pairing credential"}>
             {revealed ? credential.pairingLine : maskedCredential}
           </code>
           <div className="auth-actions">
@@ -794,6 +848,29 @@ function BridgeAuthPanel({
             </button>
           </div>
 
+          {bridgePort.options.length > 1 && (
+            <div className="auth-port-list" role="group" aria-label="Approved USB boards">
+              <small>APPROVED USB BOARDS</small>
+              {bridgePort.options.map((option) => {
+                const selected = option.id === bridgePort.selectedId;
+                return (
+                  <button
+                    key={option.id}
+                    className={selected ? "selected" : ""}
+                    aria-pressed={selected}
+                    onClick={() => onSelectPort(option.id)}
+                    disabled={disabled}
+                  >
+                    <Usb />
+                    <span><strong>{option.label}</strong><small>{option.detail}</small></span>
+                    {selected ? <Check /> : <ArrowRight />}
+                  </button>
+                );
+              })}
+              <p>Chrome does not expose macOS names such as <code>cu.usbmodem1234561</code>, so boards are identified by USB ID.</p>
+            </div>
+          )}
+
           <ol className="auth-guide">
             <li>
               <span>1</span>
@@ -809,7 +886,7 @@ function BridgeAuthPanel({
             </li>
           </ol>
 
-          <button className="auth-retrieve" onClick={onRetrieve} disabled={!compatible || disabled}>
+          <button className="auth-retrieve" onClick={onRetrieve} disabled={!compatible || disabled || bridgePort.status === "multiple"}>
             <KeyRound />{retrieveLabel}
           </button>
           <p className="auth-note"><ShieldCheck /> First use requires browser approval. After that, this page detects the board automatically. The key stays local and is never saved.</p>

@@ -222,6 +222,20 @@ h1, h2, h3, p { margin-top: 0; }
 .auth-device-state button:hover:not(:disabled) { color: var(--orange); }
 .auth-device-state button:disabled { opacity: .4; cursor: not-allowed; }
 .auth-device-state button svg { width: 11px; }
+.auth-port-list { margin: 14px 0 2px 51px; }
+.auth-port-list > small { display: block; margin-bottom: 5px; color: var(--quiet); font-size: 7px; font-weight: 700; letter-spacing: .13em; }
+.auth-port-list > button { width: 100%; min-height: 52px; display: grid; grid-template-columns: 18px minmax(0, 1fr) 16px; gap: 11px; align-items: center; padding: 9px 0; border: 0; border-bottom: 1px solid var(--line); color: var(--muted); background: transparent; text-align: left; cursor: pointer; transition: color .18s ease, background .18s ease, padding .18s ease; }
+.auth-port-list > button:first-of-type { border-top: 1px solid var(--line); }
+.auth-port-list > button:hover:not(:disabled), .auth-port-list > button.selected { padding-inline: 9px; color: var(--text); background: var(--orange-soft); }
+.auth-port-list > button:disabled { opacity: .45; cursor: not-allowed; }
+.auth-port-list > button > svg { width: 14px; color: var(--orange); }
+.auth-port-list > button > svg:last-child { width: 12px; color: var(--quiet); }
+.auth-port-list > button.selected > svg:last-child { color: var(--success); }
+.auth-port-list > button > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.auth-port-list > button strong { color: inherit; font-size: 10px; font-weight: 600; }
+.auth-port-list > button small { color: var(--quiet); font-size: 8px; letter-spacing: .06em; }
+.auth-port-list > p { margin: 9px 0 0; color: var(--quiet); font-size: 8px; line-height: 1.45; }
+.auth-port-list > p code { color: var(--muted); font: inherit; }
 .auth-guide { list-style: none; margin: 12px 0 14px 51px; padding: 0; }
 .auth-guide li { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 12px; align-items: start; padding: 10px 0; }
 .auth-guide li > span { width: 23px; height: 23px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-size: 8px; }
@@ -234,9 +248,9 @@ h1, h2, h3, p { margin-top: 0; }
 .auth-retrieve:hover:not(:disabled) { color: #fff; border-color: #ff7549; background: #ff7549; transform: translateY(-1px); }
 .auth-actions button:hover { color: var(--orange); border-color: rgba(255, 101, 52, .48); transform: translateY(-1px); }
 .auth-retrieve:disabled { opacity: .35; cursor: not-allowed; }
-.bridge-auth code { display: block; min-height: 58px; margin: 18px 0 12px 51px; padding: 12px 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; color: #c8c6cb; background: #0d0d10; font: 9px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
-.bridge-auth code.masked { user-select: none; white-space: nowrap; text-overflow: ellipsis; }
-.bridge-auth code.revealed { color: var(--text); }
+.auth-credential { display: block; min-height: 58px; margin: 18px 0 12px 51px; padding: 12px 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; color: #c8c6cb; background: #0d0d10; font: 9px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.auth-credential.masked { user-select: none; white-space: nowrap; text-overflow: ellipsis; }
+.auth-credential.revealed { color: var(--text); }
 .auth-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: 51px; }
 .auth-actions button { padding: 0 13px; }
 .auth-actions .auth-primary { color: #fff; background: var(--orange); border-color: var(--orange); }
@@ -343,7 +357,7 @@ h1, h2, h3, p { margin-top: 0; }
   .utility-grid { padding: 47px 0 62px; }.pane-heading { display: block; }.pane-heading > span { display: block; margin-bottom: 10px; }.pane-heading h2 { font-size: 28px; }
   .mode-button { grid-template-columns: 33px 1fr; min-height: 104px; padding-right: 0; }.mode-version { grid-column: 2; }.mode-button:hover:not(:disabled), .mode-button.selected { padding-left: 11px; }
   .firmware-detector { grid-template-columns: 32px 1fr; }.firmware-detector > button { grid-column: 2; width: max-content; margin-top: 4px; }
-  .auth-device-state, .auth-guide, .bridge-auth code, .auth-actions, .auth-note { margin-left: 47px; }.auth-retrieve { width: calc(100% - 47px); margin-left: 47px; }
+  .auth-device-state, .auth-port-list, .auth-guide, .auth-credential, .auth-actions, .auth-note { margin-left: 47px; }.auth-retrieve { width: calc(100% - 47px); margin-left: 47px; }
   .auth-device-state { grid-template-columns: 8px minmax(0, 1fr); }.auth-device-state button { grid-column: 2; width: max-content; }
   .firmware-meta { grid-template-columns: repeat(2, 1fr); gap: 16px 0; }.browser-handoff { display: flex; flex-direction: column; gap: 8px; }.browser-handoff button { margin-top: 8px; }
   .console-pane { min-height: 510px; border-radius: 9px; }.progress-summary { grid-template-columns: 102px 1fr; gap: 14px; padding-inline: 18px; }.percent strong { font-size: 60px; }.progress-track { margin-inline: 18px; }.terminal-log { min-height: 315px; padding-inline: 18px; }.console-head, .console-foot { padding-inline: 17px; }
