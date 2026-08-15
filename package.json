@@ -7,9 +7,11 @@
     "dev": "npm run sync:firmware && vite",
     "build": "npm run sync:firmware && tsc -b && vite build",
     "preview": "vite preview",
+    "preview:worker": "npm run build && wrangler dev",
     "sync:firmware": "node scripts/sync-firmware.mjs",
     "test": "vitest run",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "^5.2.8",
@@ -35,6 +37,7 @@
     "typescript": "~5.7.2",
     "typescript-eslint": "^8.19.1",
     "vite": "^8.2.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wrangler": "^4.123.0"
   }
 }

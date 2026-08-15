@@ -2,6 +2,8 @@
 
 Browser-based installer and recovery helper for the official Flipper Zero ESP32-S2 Wi-Fi Devboard.
 
+Production runs on Cloudflare Workers Static Assets. The interface is intentionally a single utility workspace: firmware selection, board preparation, persistent console, live progress, completion, and recovery.
+
 It provides two bounded firmware paths:
 
 - **Install Flipforge Bridge** from the latest public `Flipforge-Software/flipforge-bridge` release.
@@ -22,6 +24,15 @@ npm run dev
 ```
 
 `npm run dev` and `npm run build` synchronize verified current firmware into ignored `public/firmware/` output.
+
+## Cloudflare Workers
+
+```bash
+npx wrangler whoami
+npm run deploy
+```
+
+`wrangler.jsonc` deploys `dist/` as Workers Static Assets with SPA fallback. The browser still talks directly to the board through Web Serial; Cloudflare only serves the application and verified firmware files.
 
 ## Safety boundaries
 

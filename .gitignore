@@ -2,5 +2,7 @@ node_modules/
 dist/
 public/firmware/
 .DS_Store
+.wrangler/
+worker-configuration.d.ts
 *.local
 npm-debug.log*

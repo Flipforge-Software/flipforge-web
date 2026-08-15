@@ -1,36 +1,59 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Check, ChevronRight, CircleAlert, Copy, ExternalLink, RotateCcw, ShieldCheck, Usb, Wifi } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  ArrowRight,
+  Check,
+  CircleAlert,
+  Copy,
+  ExternalLink,
+  RefreshCw,
+  RotateCcw,
+  ShieldCheck,
+  Terminal,
+  Usb,
+  Wifi,
+} from "lucide-react";
 import { BoardIllustration } from "./components/BoardIllustration";
 import { flashErrorMessage, flashFirmware, supportsWebSerial } from "./flasher";
-import { formatBytes, loadFirmwareCatalog, type FirmwareCatalog, type FirmwareId, type FirmwareTarget } from "./firmware";
+import {
+  formatBytes,
+  loadFirmwareCatalog,
+  type FirmwareCatalog,
+  type FirmwareId,
+  type FirmwareTarget,
+} from "./firmware";
 
-type Phase = "select" | "prepare" | "flashing" | "complete" | "error";
+type Phase = "prepare" | "flashing" | "complete" | "error";
 
 const bootSteps = [
   "Remove the Wi-Fi Devboard from your Flipper.",
   "Connect the board directly to this computer with USB-C.",
-  "Hold BOOT, press and release RESET, then release BOOT.",
+  "Hold BOOT, tap RESET, then release BOOT.",
 ];
 
 export default function App() {
   const [catalog, setCatalog] = useState<FirmwareCatalog | null>(null);
   const [selectedId, setSelectedId] = useState<FirmwareId>("bridge");
-  const [phase, setPhase] = useState<Phase>("select");
+  const [phase, setPhase] = useState<Phase>("prepare");
   const [confirmed, setConfirmed] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [progressDetail, setProgressDetail] = useState("Waiting for board");
-  const [error, setError] = useState<string | null>(null);
-  const [resultText, setResultText] = useState("");
+  const [progressDetail, setProgressDetail] = useState("Waiting for your board");
   const [logs, setLogs] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const workflowRef = useRef<HTMLElement>(null);
   const compatible = typeof window !== "undefined" && supportsWebSerial();
 
   useEffect(() => {
-    loadFirmwareCatalog().then(setCatalog).catch((reason: unknown) => {
-      setCatalogError(reason instanceof Error ? reason.message : "Firmware catalog could not be loaded.");
-    });
+    loadFirmwareCatalog()
+      .then((value) => {
+        setCatalog(value);
+        setLogs(["Verified firmware catalog loaded.", "Select a mode and prepare the ESP32-S2 board."]);
+      })
+      .catch((reason: unknown) => {
+        const message = reason instanceof Error ? reason.message : "Firmware catalog could not be loaded.";
+        setCatalogError(message);
+        setLogs([`ERROR  ${message}`]);
+      });
   }, []);
 
   const selected = useMemo(
@@ -38,34 +61,55 @@ export default function App() {
     [catalog, selectedId],
   );
 
+  const totalSize = selected?.segments.reduce((sum, segment) => sum + segment.size, 0) ?? 0;
+  const percent = Math.round(progress * 100);
+
   const chooseMode = (id: FirmwareId) => {
     if (phase === "flashing") return;
+    const next = catalog?.targets.find((target) => target.id === id);
     setSelectedId(id);
     setPhase("prepare");
     setConfirmed(false);
+    setProgress(0);
+    setProgressDetail("Waiting for your board");
     setError(null);
-    requestAnimationFrame(() => workflowRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    setLogs([
+      `Mode set to ${next?.name ?? (id === "bridge" ? "Flipforge Bridge" : "Original Flipper Firmware")}.`,
+      "Complete the bootloader steps, then connect the serial port.",
+    ]);
+  };
+
+  const appendLog = (line: string) => {
+    const clean = line.trim();
+    if (!clean) return;
+    setLogs((current) => [...current.slice(-119), clean]);
   };
 
   const startFlash = async () => {
     if (!selected || !confirmed || !compatible) return;
     setPhase("flashing");
     setProgress(0);
-    setLogs([]);
     setError(null);
+    setLogs([`Preparing ${selected.name} ${selected.version}.`, "Downloading verified firmware images…"]);
+
     try {
       const result = await flashFirmware(selected, {
         onProgress: (value, detail) => {
           setProgress(value);
           setProgressDetail(detail);
         },
-        onLog: (line) => setLogs((current) => [...current.slice(-79), line.trim()].filter(Boolean)),
-        onDeviceLost: () => setLogs((current) => [...current.slice(-79), "Serial device disconnected."]),
+        onLog: appendLog,
+        onDeviceLost: () => appendLog("Serial device disconnected."),
       });
-      setResultText(`${selected.shortName} ${selected.version} was verified on ${result.chip} in ${result.durationSeconds.toFixed(0)} seconds.`);
+      setProgress(1);
+      setProgressDetail("Flash verified");
+      appendLog(`${selected.shortName} ${selected.version} verified on ${result.chip}.`);
+      appendLog("Press RESET on the board to start the new firmware.");
       setPhase("complete");
     } catch (reason) {
-      setError(flashErrorMessage(reason));
+      const message = flashErrorMessage(reason);
+      setError(message);
+      appendLog(`ERROR  ${message}`);
       setPhase("error");
     }
   };
@@ -74,8 +118,9 @@ export default function App() {
     setPhase("prepare");
     setConfirmed(false);
     setProgress(0);
+    setProgressDetail("Waiting for your board");
     setError(null);
-    setLogs([]);
+    setLogs(["Ready for another board."]);
   };
 
   const copyLink = async () => {
@@ -84,169 +129,218 @@ export default function App() {
     window.setTimeout(() => setCopied(false), 1600);
   };
 
+  const stateLabel =
+    phase === "flashing"
+      ? "Writing firmware"
+      : phase === "complete"
+        ? "Complete"
+        : phase === "error"
+          ? "Stopped"
+          : catalogError
+            ? "Catalog error"
+            : "Ready";
+
   return (
-    <main>
-      <header className="site-header">
+    <main className="app" id="top">
+      <header className="topbar">
         <a className="wordmark" href="#top" aria-label="Flipforge home">
           <span className="wordmark-mark">FF</span>
           <span>FLIPFORGE</span>
         </a>
-        <div className="header-meta"><span className={`status-dot ${compatible ? "ready" : ""}`} /> DEVBOARD UTILITY</div>
+        <div className="topbar-status">
+          <span className={`status-dot ${compatible ? "ready" : ""}`} />
+          {compatible ? "WEB SERIAL READY" : "COMPUTER BROWSER REQUIRED"}
+        </div>
+        <a className="source-link" href="https://github.com/Flipforge-Software/flipforge-web" target="_blank" rel="noreferrer">
+          SOURCE <ExternalLink />
+        </a>
       </header>
 
-      <section className="hero" id="top">
-        <div className="hero-copy">
-          <p className="eyebrow">OFFICIAL ESP32-S2 WI-FI DEVBOARD</p>
-          <h1>Flash it for Flipforge.<br /><span>Restore it anytime.</span></h1>
-          <p className="hero-support">One guided tool to install the mobile bridge or return your board to Flipper’s original firmware.</p>
-        </div>
-        <BoardIllustration active={phase === "flashing"} />
-        <div className="hero-floor">
-          <span>{compatible ? "Browser ready" : "Desktop Chrome or Edge required"}</span>
-          <span>USB · LOCAL · VERIFIED</span>
-        </div>
-      </section>
-
-      <section className="mode-section" aria-labelledby="choose-title">
-        <div className="section-index">01</div>
-        <div className="section-heading">
-          <p className="eyebrow">CHOOSE A PATH</p>
-          <h2 id="choose-title">What should this board run?</h2>
-        </div>
-        <div className="mode-list">
-          <ModeRow
-            target={catalog?.targets.find((target) => target.id === "bridge")}
-            icon={<Wifi />}
-            selected={selectedId === "bridge"}
-            action="Install Bridge"
-            onClick={() => chooseMode("bridge")}
-          />
-          <ModeRow
-            target={catalog?.targets.find((target) => target.id === "official")}
-            icon={<RotateCcw />}
-            selected={selectedId === "official"}
-            action="Restore Original"
-            onClick={() => chooseMode("official")}
-          />
-        </div>
-        {catalogError && <div className="inline-error"><CircleAlert /> {catalogError}</div>}
-      </section>
-
-      <section className="workflow" ref={workflowRef} aria-labelledby="workflow-title">
-        <div className="workflow-head">
-          <div className="section-index">02</div>
-          <div className="section-heading">
-            <p className="eyebrow">GUIDED FLASH</p>
-            <h2 id="workflow-title">{selected ? selected.name : "Select firmware above"}</h2>
+      <div className="workspace">
+        <section className="workspace-intro">
+          <div>
+            <p className="eyebrow">WI-FI DEVBOARD UTILITY</p>
+            <h1>Flash or restore your board.</h1>
+            <p>Install the Flipforge mobile bridge or return to the original Flipper firmware.</p>
           </div>
-          {selected && <div className="version-lock"><ShieldCheck /> VERIFIED BUILD <strong>{selected.version}</strong></div>}
+          <div className="intro-board" aria-hidden="true">
+            <BoardIllustration active={phase === "flashing"} />
+          </div>
+        </section>
+
+        <div className="utility-grid">
+          <section className="setup-pane" aria-labelledby="setup-title">
+            <div className="pane-heading">
+              <span>SETUP</span>
+              <h2 id="setup-title">Choose firmware</h2>
+            </div>
+
+            <div className="mode-switch" aria-label="Firmware mode">
+              <ModeButton
+                target={catalog?.targets.find((target) => target.id === "bridge")}
+                selected={selectedId === "bridge"}
+                icon={<Wifi />}
+                fallbackName="Flipforge Bridge"
+                onClick={() => chooseMode("bridge")}
+                disabled={phase === "flashing"}
+              />
+              <ModeButton
+                target={catalog?.targets.find((target) => target.id === "official")}
+                selected={selectedId === "official"}
+                icon={<RotateCcw />}
+                fallbackName="Original Firmware"
+                onClick={() => chooseMode("official")}
+                disabled={phase === "flashing"}
+              />
+            </div>
+
+            <div className="firmware-meta">
+              <span><b>VERSION</b>{selected ? selected.version : "—"}</span>
+              <span><b>DOWNLOAD</b>{selected ? formatBytes(totalSize) : "—"}</span>
+              <span><b>CHIP</b>ESP32-S2</span>
+              <span><b>SOURCE</b>{selected?.sourceName ?? "—"}</span>
+            </div>
+
+            <div className="step-block">
+              <div className="block-label"><Usb /> CONNECT THE BOARD</div>
+              <ol className="boot-steps">
+                {bootSteps.map((step, index) => (
+                  <li key={step}>
+                    <span>{index + 1}</span>
+                    <p>{step}</p>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            {phase === "complete" && (
+              <div className="result-message success" role="status">
+                <Check />
+                <div><strong>Firmware verified.</strong><span>Press RESET on the board to start it.</span></div>
+              </div>
+            )}
+
+            {phase === "error" && (
+              <div className="result-message error" role="alert">
+                <CircleAlert />
+                <div><strong>Flash stopped.</strong><span>{error}</span></div>
+              </div>
+            )}
+
+            {!compatible ? (
+              <div className="browser-handoff">
+                <strong>Open this page in desktop Chrome or Edge.</strong>
+                <span>iPhone and iPad do not expose the serial connection used by the board bootloader.</span>
+                <button onClick={copyLink}>{copied ? <Check /> : <Copy />}{copied ? "Link copied" : "Copy link"}</button>
+              </div>
+            ) : phase === "complete" || phase === "error" ? (
+              <button className="secondary-action" onClick={resetWorkflow}><RefreshCw /> Start again</button>
+            ) : (
+              <>
+                <label className="confirmation">
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    onChange={(event) => setConfirmed(event.target.checked)}
+                    disabled={phase === "flashing"}
+                  />
+                  <span className="check-box"><Check /></span>
+                  <span>I completed all three steps</span>
+                </label>
+                <button className="primary-action" onClick={startFlash} disabled={!selected || !confirmed || phase === "flashing" || Boolean(catalogError)}>
+                  {phase === "flashing" ? "Flashing…" : `Connect & flash ${selected?.shortName ?? "firmware"}`}
+                  <ArrowRight />
+                </button>
+                <p className="action-note"><ShieldCheck /> Firmware is verified before anything is written.</p>
+              </>
+            )}
+          </section>
+
+          <ConsolePane
+            state={stateLabel}
+            phase={phase}
+            percent={percent}
+            detail={progressDetail}
+            logs={logs}
+            catalogError={catalogError}
+          />
         </div>
 
-        {!compatible ? (
-          <MobileHandoff onCopy={copyLink} copied={copied} />
-        ) : phase === "flashing" ? (
-          <FlashProgress progress={progress} detail={progressDetail} logs={logs} />
-        ) : phase === "complete" ? (
-          <Completion selected={selected!} detail={resultText} onAgain={resetWorkflow} />
-        ) : phase === "error" ? (
-          <ErrorState message={error!} logs={logs} onRetry={resetWorkflow} />
-        ) : (
-          <Preparation
-            selected={selected}
-            confirmed={confirmed}
-            onConfirmed={setConfirmed}
-            onFlash={startFlash}
-            loading={!catalog && !catalogError}
-          />
-        )}
-      </section>
-
-      <section className="safety-strip">
-        <ShieldCheck />
-        <div><strong>Nothing is uploaded.</strong><span>Firmware travels from this page directly to your board over USB. Flipforge does not receive serial data.</span></div>
-        <a href="https://github.com/Flipforge-Software/flipforge-web" target="_blank" rel="noreferrer">View source <ExternalLink /></a>
-      </section>
-
-      <footer><span>FLIPFORGE SOFTWARE</span><span>Use only with the official ESP32-S2 Wi-Fi Devboard.</span></footer>
+        <footer>
+          <span><ShieldCheck /> LOCAL USB FLASHING</span>
+          <p>No firmware or serial data is uploaded to Flipforge.</p>
+          <p>Use only with the official ESP32-S2 Wi-Fi Devboard.</p>
+        </footer>
+      </div>
     </main>
   );
 }
 
-function ModeRow({ target, icon, selected, action, onClick }: { target?: FirmwareTarget; icon: React.ReactNode; selected: boolean; action: string; onClick: () => void }) {
-  const total = target?.segments.reduce((sum, segment) => sum + segment.size, 0);
+function ModeButton({
+  target,
+  selected,
+  icon,
+  fallbackName,
+  onClick,
+  disabled,
+}: {
+  target?: FirmwareTarget;
+  selected: boolean;
+  icon: React.ReactNode;
+  fallbackName: string;
+  onClick: () => void;
+  disabled: boolean;
+}) {
   return (
-    <button className={`mode-row ${selected ? "selected" : ""}`} onClick={onClick} disabled={!target}>
+    <button className={`mode-button ${selected ? "selected" : ""}`} aria-pressed={selected} onClick={onClick} disabled={disabled || !target}>
       <span className="mode-icon">{icon}</span>
-      <span className="mode-copy"><strong>{target?.name ?? "Loading firmware…"}</strong><small>{target?.description ?? "Checking verified release"}</small></span>
-      <span className="mode-facts">{target && <><b>v{target.version}</b><small>{formatBytes(total ?? 0)}</small></>}</span>
-      <span className="mode-action">{action} <ChevronRight /></span>
+      <span><strong>{target?.name ?? fallbackName}</strong><small>{target?.description ?? "Loading verified release…"}</small></span>
+      <span className="mode-version">{target ? `v${target.version}` : "—"}</span>
     </button>
   );
 }
 
-function Preparation({ selected, confirmed, onConfirmed, onFlash, loading }: { selected: FirmwareTarget | null; confirmed: boolean; onConfirmed: (value: boolean) => void; onFlash: () => void; loading: boolean }) {
+function ConsolePane({
+  state,
+  phase,
+  percent,
+  detail,
+  logs,
+  catalogError,
+}: {
+  state: string;
+  phase: Phase;
+  percent: number;
+  detail: string;
+  logs: string[];
+  catalogError: string | null;
+}) {
+  const visibleLogs = logs.length ? logs.slice(-14) : ["Loading verified firmware catalog…"];
+  const stateClass = phase === "complete" ? "success" : phase === "error" || catalogError ? "error" : phase === "flashing" ? "active" : "";
+
   return (
-    <div className="preparation-grid">
-      <ol className="boot-steps">
-        {bootSteps.map((step, index) => <li key={step}><span>{String(index + 1).padStart(2, "0")}</span><p>{step}</p></li>)}
-      </ol>
-      <div className="flash-control">
-        <Usb className="control-icon" />
-        <p className="eyebrow">BOOTLOADER CHECK</p>
-        <h3>Ready for the port picker?</h3>
-        <p>The browser should show a device labeled ESP32-S2 or USB JTAG/serial.</p>
-        <label className="confirmation">
-          <input type="checkbox" checked={confirmed} onChange={(event) => onConfirmed(event.target.checked)} />
-          <span className="check-box"><Check /></span>
-          <span>I completed the three steps</span>
-        </label>
-        <button className="primary-action" onClick={onFlash} disabled={!selected || !confirmed || loading}>
-          {loading ? "Loading verified firmware" : `Connect & flash ${selected?.shortName ?? "firmware"}`} <ArrowRight />
-        </button>
-        <small className="control-note">Do not unplug the board while writing.</small>
+    <section className="console-pane" aria-label="Flash console" aria-live="polite">
+      <div className="console-head">
+        <span><Terminal /> FLASH CONSOLE</span>
+        <span className={`console-state ${stateClass}`}><i />{state}</span>
       </div>
-    </div>
-  );
-}
-
-function FlashProgress({ progress, detail, logs }: { progress: number; detail: string; logs: string[] }) {
-  const percent = Math.round(progress * 100);
-  return (
-    <div className="progress-layout" aria-live="polite">
-      <div className="progress-number"><strong>{percent}</strong><span>%</span></div>
-      <div className="progress-copy"><p className="eyebrow">BOARD CONNECTED</p><h3>{detail}</h3><div className="progress-track"><span style={{ width: `${percent}%` }} /></div><p>Keep this tab open and leave the USB cable connected.</p></div>
-      <div className="terminal" aria-label="Flash log">{logs.length ? logs.slice(-8).map((line, index) => <code key={`${index}-${line}`}>{line}</code>) : <code>Starting secure local flash…</code>}</div>
-    </div>
-  );
-}
-
-function Completion({ selected, detail, onAgain }: { selected: FirmwareTarget; detail: string; onAgain: () => void }) {
-  return (
-    <div className="completion-state">
-      <span className="success-mark"><Check /></span>
-      <div><p className="eyebrow">FLASH VERIFIED</p><h3>Press RESET on the board.</h3><p>{detail}</p><p className="next-step">{selected.id === "bridge" ? "Then attach it to your Flipper and open Flipforge to connect over Wi-Fi." : "The original Flipper Devboard functionality will start after RESET."}</p></div>
-      <button className="secondary-action" onClick={onAgain}>Flash again</button>
-    </div>
-  );
-}
-
-function ErrorState({ message, logs, onRetry }: { message: string; logs: string[]; onRetry: () => void }) {
-  return (
-    <div className="error-state">
-      <CircleAlert />
-      <div><p className="eyebrow">FLASH STOPPED</p><h3>{message}</h3><p>No success was reported. Put the board back in bootloader mode before retrying.</p></div>
-      <button className="secondary-action" onClick={onRetry}>Try again</button>
-      {logs.length > 0 && <div className="terminal">{logs.slice(-6).map((line, index) => <code key={`${index}-${line}`}>{line}</code>)}</div>}
-    </div>
-  );
-}
-
-function MobileHandoff({ onCopy, copied }: { onCopy: () => void; copied: boolean }) {
-  return (
-    <div className="handoff-state">
-      <span className="handoff-device"><Usb /></span>
-      <div><p className="eyebrow">COMPUTER REQUIRED</p><h3>Open this page in Chrome or Edge on a Mac, Windows PC, Linux computer, or supported Android device.</h3><p>iPhone and iPad browsers do not expose the Web Serial connection needed by the ESP32-S2 bootloader.</p></div>
-      <button className="secondary-action" onClick={onCopy}>{copied ? <Check /> : <Copy />}{copied ? "Link copied" : "Copy this link"}</button>
-    </div>
+      <div className="progress-summary">
+        <div className="percent"><strong>{percent}</strong><span>%</span></div>
+        <div><small>CURRENT STEP</small><strong>{catalogError ?? detail}</strong></div>
+      </div>
+      <div className="progress-track" aria-label={`${percent}% complete`}>
+        <span style={{ width: `${percent}%` }} />
+      </div>
+      <div className="terminal-log">
+        {visibleLogs.map((line, index) => (
+          <code key={`${index}-${line}`}><span>›</span>{line}</code>
+        ))}
+        {phase === "flashing" && <span className="console-cursor" />}
+      </div>
+      <div className="console-foot">
+        <span>USB / LOCAL</span>
+        <span>SHA-256 VERIFIED</span>
+      </div>
+    </section>
   );
 }
