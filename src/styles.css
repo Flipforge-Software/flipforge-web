@@ -208,13 +208,31 @@ h1, h2, h3, p { margin-top: 0; }
 .auth-heading p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .auth-ready .auth-icon { color: var(--success); }
 .auth-error .auth-icon { color: var(--error); }
-.auth-instruction { display: grid; grid-template-columns: 25px 1fr; gap: 13px; align-items: center; margin: 18px 0 13px 51px; }
-.auth-instruction span { width: 23px; height: 23px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-size: 8px; }
-.auth-instruction p { margin: 0; color: #d3d1d6; font-size: 11px; line-height: 1.45; }
+.auth-device-state { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 12px; align-items: center; margin: 18px 0 0 51px; padding: 13px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.device-state-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--quiet); }
+.device-detected .device-state-dot { background: var(--success); box-shadow: 0 0 0 4px rgba(88, 200, 132, .09); }
+.device-checking .device-state-dot { background: var(--orange); animation: signal-pulse 1.2s ease-in-out infinite; }
+.device-multiple .device-state-dot { background: var(--orange); }
+.device-unsupported .device-state-dot { background: var(--error); }
+.auth-device-state > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.auth-device-state small { color: var(--quiet); font-size: 7px; font-weight: 700; letter-spacing: .13em; }
+.auth-device-state strong { color: var(--text); font-size: 12px; font-weight: 600; }
+.auth-device-state p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.auth-device-state button { min-height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; color: var(--muted); background: transparent; font-size: 8px; font-weight: 700; cursor: pointer; }
+.auth-device-state button:hover:not(:disabled) { color: var(--orange); }
+.auth-device-state button:disabled { opacity: .4; cursor: not-allowed; }
+.auth-device-state button svg { width: 11px; }
+.auth-guide { list-style: none; margin: 12px 0 14px 51px; padding: 0; }
+.auth-guide li { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 12px; align-items: start; padding: 10px 0; }
+.auth-guide li > span { width: 23px; height: 23px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-size: 8px; }
+.auth-guide li > div { display: flex; flex-direction: column; gap: 3px; padding-top: 2px; }
+.auth-guide strong { color: #d9d7dc; font-size: 11px; font-weight: 600; }
+.auth-guide p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .auth-retrieve, .auth-actions button { min-height: 39px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text); background: var(--surface-raised); font: inherit; font-size: 10px; font-weight: 700; cursor: pointer; transition: transform .18s ease, border-color .18s ease, color .18s ease, background .18s ease; }
-.auth-retrieve { width: calc(100% - 51px); margin-left: 51px; }
+.auth-retrieve { width: calc(100% - 51px); margin-left: 51px; color: #fff; border-color: var(--orange); background: var(--orange); }
 .auth-retrieve svg, .auth-actions svg { width: 13px; }
-.auth-retrieve:hover:not(:disabled), .auth-actions button:hover { color: var(--orange); border-color: rgba(255, 101, 52, .48); transform: translateY(-1px); }
+.auth-retrieve:hover:not(:disabled) { color: #fff; border-color: #ff7549; background: #ff7549; transform: translateY(-1px); }
+.auth-actions button:hover { color: var(--orange); border-color: rgba(255, 101, 52, .48); transform: translateY(-1px); }
 .auth-retrieve:disabled { opacity: .35; cursor: not-allowed; }
 .bridge-auth code { display: block; min-height: 58px; margin: 18px 0 12px 51px; padding: 12px 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; color: #c8c6cb; background: #0d0d10; font: 9px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .bridge-auth code.masked { user-select: none; white-space: nowrap; text-overflow: ellipsis; }
@@ -325,7 +343,8 @@ h1, h2, h3, p { margin-top: 0; }
   .utility-grid { padding: 47px 0 62px; }.pane-heading { display: block; }.pane-heading > span { display: block; margin-bottom: 10px; }.pane-heading h2 { font-size: 28px; }
   .mode-button { grid-template-columns: 33px 1fr; min-height: 104px; padding-right: 0; }.mode-version { grid-column: 2; }.mode-button:hover:not(:disabled), .mode-button.selected { padding-left: 11px; }
   .firmware-detector { grid-template-columns: 32px 1fr; }.firmware-detector > button { grid-column: 2; width: max-content; margin-top: 4px; }
-  .auth-instruction, .bridge-auth code, .auth-actions, .auth-note { margin-left: 47px; }.auth-retrieve { width: calc(100% - 47px); margin-left: 47px; }
+  .auth-device-state, .auth-guide, .bridge-auth code, .auth-actions, .auth-note { margin-left: 47px; }.auth-retrieve { width: calc(100% - 47px); margin-left: 47px; }
+  .auth-device-state { grid-template-columns: 8px minmax(0, 1fr); }.auth-device-state button { grid-column: 2; width: max-content; }
   .firmware-meta { grid-template-columns: repeat(2, 1fr); gap: 16px 0; }.browser-handoff { display: flex; flex-direction: column; gap: 8px; }.browser-handoff button { margin-top: 8px; }
   .console-pane { min-height: 510px; border-radius: 9px; }.progress-summary { grid-template-columns: 102px 1fr; gap: 14px; padding-inline: 18px; }.percent strong { font-size: 60px; }.progress-track { margin-inline: 18px; }.terminal-log { min-height: 315px; padding-inline: 18px; }.console-head, .console-foot { padding-inline: 17px; }
 }

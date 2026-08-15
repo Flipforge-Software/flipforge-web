@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseBridgePairingResponse } from "../src/pairing";
+import { isPotentialBridgePort, parseBridgePairingResponse } from "../src/pairing";
 
 const secret = "a1".repeat(32);
 
@@ -25,5 +25,17 @@ describe("Bridge pairing response", () => {
     expect(() => parseBridgePairingResponse(`FFPAIR1 Other-1234 password123 ${secret}\n`)).toThrow("Wi-Fi name");
     expect(() => parseBridgePairingResponse(`FFPAIR1 Flipforge-1234 short ${secret}\n`)).toThrow("Wi-Fi password");
     expect(() => parseBridgePairingResponse(`FFPAIR1 Flipforge-1234 password123 ${"z".repeat(64)}\n`)).toThrow("authentication secret");
+  });
+});
+
+describe("Bridge USB detection", () => {
+  it("recognizes Espressif runtime and bootloader ports without relying on a changing product ID", () => {
+    expect(isPotentialBridgePort({ usbVendorId: 0x303a, usbProductId: 0x4002 })).toBe(true);
+    expect(isPotentialBridgePort({ usbVendorId: 0x303a, usbProductId: 0x1001 })).toBe(true);
+  });
+
+  it("ignores unrelated USB serial devices", () => {
+    expect(isPotentialBridgePort({ usbVendorId: 0x10c4, usbProductId: 0xea60 })).toBe(false);
+    expect(isPotentialBridgePort({})).toBe(false);
   });
 });

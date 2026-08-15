@@ -14,6 +14,20 @@ export interface PairingCallbacks {
   onDeviceLost: () => void;
 }
 
+export interface PairingOptions {
+  port?: SerialPort;
+}
+
+export function isPotentialBridgePort(info: SerialPortInfo): boolean {
+  return info.usbVendorId === 0x303a;
+}
+
+export async function findAuthorizedBridgePorts(): Promise<SerialPort[]> {
+  if (!window.isSecureContext || !("serial" in navigator)) return [];
+  const ports = await navigator.serial.getPorts();
+  return ports.filter((port) => isPotentialBridgePort(port.getInfo()));
+}
+
 function isPrintableASCII(value: string): boolean {
   return value.length >= 8 && value.length <= 63 && /^[\x20-\x7e]+$/.test(value);
 }
@@ -79,13 +93,19 @@ function readWithTimeout(
   });
 }
 
-export async function retrieveBridgePairing(callbacks: PairingCallbacks): Promise<BridgePairingCredential> {
+export async function retrieveBridgePairing(
+  callbacks: PairingCallbacks,
+  options: PairingOptions = {},
+): Promise<BridgePairingCredential> {
   if (!window.isSecureContext || !("serial" in navigator)) {
     throw new Error("Use desktop Chrome or Edge over HTTPS to retrieve Bridge auth.");
   }
 
-  callbacks.onProgress(0.05, "Choose the running Flipforge Bridge port");
-  const port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x303a }] });
+  callbacks.onProgress(
+    0.05,
+    options.port ? "Using the detected USB board" : "Choose your running Flipforge Bridge",
+  );
+  const port = options.port ?? await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x303a }] });
   const onDisconnect = () => callbacks.onDeviceLost();
   port.addEventListener("disconnect", onDisconnect);
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;

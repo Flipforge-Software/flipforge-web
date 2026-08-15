@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { detectFirmware, flashErrorMessage, flashFirmware, supportsWebSerial } from "./flasher";
 import {
+  findAuthorizedBridgePorts,
   pairingErrorMessage,
   retrieveBridgePairing,
   type BridgePairingCredential,
@@ -42,6 +43,11 @@ type PairingState = {
   status: "idle" | "requesting" | "ready" | "error";
   detail: string;
   credential?: BridgePairingCredential;
+};
+type BridgePortState = {
+  status: "checking" | "detected" | "multiple" | "not-found" | "unsupported";
+  detail: string;
+  port?: SerialPort;
 };
 
 const bootSteps = [
@@ -72,18 +78,78 @@ export default function App() {
   });
   const [pairing, setPairing] = useState<PairingState>({
     status: "idle",
-    detail: "Retrieve the protected iPhone pairing credential from a running Bridge.",
+    detail: "Copy the protected connection key into Flipforge on iPhone.",
+  });
+  const [bridgePort, setBridgePort] = useState<BridgePortState>({
+    status: "checking",
+    detail: "Looking for a previously approved USB board…",
   });
   const [authRevealed, setAuthRevealed] = useState(false);
   const [authCopied, setAuthCopied] = useState(false);
   const compatible = typeof window !== "undefined" && supportsWebSerial();
   const busy = phase === "detecting" || phase === "pairing" || phase === "flashing";
 
+  const scanForBridge = useCallback(async () => {
+    if (!compatible) {
+      setBridgePort({
+        status: "unsupported",
+        detail: "Open this page in desktop Chrome or Edge to connect over USB.",
+      });
+      return;
+    }
+
+    setBridgePort((current) => ({
+      status: "checking",
+      detail: "Looking for a previously approved USB board…",
+      port: current.port,
+    }));
+
+    try {
+      const ports = await findAuthorizedBridgePorts();
+      if (ports.length === 1) {
+        setBridgePort({
+          status: "detected",
+          detail: "USB board found. You will not need to choose a port again.",
+          port: ports[0],
+        });
+      } else if (ports.length > 1) {
+        setBridgePort({
+          status: "multiple",
+          detail: "More than one approved board is connected. Choose the Bridge when asked.",
+        });
+      } else {
+        setBridgePort({
+          status: "not-found",
+          detail: "No approved board found. Connect it and choose it once.",
+        });
+      }
+    } catch {
+      setBridgePort({
+        status: "not-found",
+        detail: "USB detection was blocked. Reconnect the board, then scan again.",
+      });
+    }
+  }, [compatible]);
+
   useEffect(() => {
     const updateTab = () => setTab(tabFromPath());
     window.addEventListener("popstate", updateTab);
     return () => window.removeEventListener("popstate", updateTab);
   }, []);
+
+  useEffect(() => {
+    if (tab !== "flash") return;
+    void scanForBridge();
+    if (!("serial" in navigator)) return;
+
+    const handlePortChange = () => void scanForBridge();
+    navigator.serial.addEventListener("connect", handlePortChange);
+    navigator.serial.addEventListener("disconnect", handlePortChange);
+    return () => {
+      navigator.serial.removeEventListener("connect", handlePortChange);
+      navigator.serial.removeEventListener("disconnect", handlePortChange);
+    };
+  }, [scanForBridge, tab]);
 
   useEffect(() => {
     if (!authRevealed) return;
@@ -202,14 +268,20 @@ export default function App() {
     ]);
 
     try {
-      const credential = await retrieveBridgePairing({
-        onProgress: (value, detail) => {
-          setProgress(value);
-          setProgressDetail(detail);
-          setPairing((current) => ({ ...current, detail }));
+      const credential = await retrieveBridgePairing(
+        {
+          onProgress: (value, detail) => {
+            setProgress(value);
+            setProgressDetail(detail);
+            setPairing((current) => ({ ...current, detail }));
+          },
+          onDeviceLost: () => {
+            appendLog("Bridge runtime port disconnected.");
+            void scanForBridge();
+          },
         },
-        onDeviceLost: () => appendLog("Bridge runtime port disconnected."),
-      });
+        { port: bridgePort.status === "detected" ? bridgePort.port : undefined },
+      );
       setPairing({
         status: "ready",
         detail: "Ready to copy into Flipforge on iPhone. It is not saved by this website.",
@@ -245,7 +317,7 @@ export default function App() {
     setAuthCopied(false);
     setPairing({
       status: "idle",
-      detail: "Retrieve the protected iPhone pairing credential from a running Bridge.",
+      detail: "Copy the protected connection key into Flipforge on iPhone.",
     });
   };
 
@@ -368,11 +440,13 @@ export default function App() {
 
               <BridgeAuthPanel
                 pairing={pairing}
+                bridgePort={bridgePort}
                 revealed={authRevealed}
                 copied={authCopied}
                 compatible={compatible}
                 disabled={busy}
                 onRetrieve={startPairing}
+                onRescan={() => void scanForBridge()}
                 onCopy={copyBridgeAuth}
                 onToggleReveal={() => setAuthRevealed((current) => !current)}
                 onClear={clearBridgeAuth}
@@ -631,21 +705,25 @@ function FirmwareDetector({
 
 function BridgeAuthPanel({
   pairing,
+  bridgePort,
   revealed,
   copied,
   compatible,
   disabled,
   onRetrieve,
+  onRescan,
   onCopy,
   onToggleReveal,
   onClear,
 }: {
   pairing: PairingState;
+  bridgePort: BridgePortState;
   revealed: boolean;
   copied: boolean;
   compatible: boolean;
   disabled: boolean;
   onRetrieve: () => void;
+  onRescan: () => void;
   onCopy: () => void;
   onToggleReveal: () => void;
   onClear: () => void;
@@ -653,12 +731,28 @@ function BridgeAuthPanel({
   const credential = pairing.credential;
   const label =
     pairing.status === "requesting"
-      ? "Waiting for the Bridge…"
+      ? "Requesting the connection key…"
       : pairing.status === "ready"
-        ? "Auth ready"
+        ? "Connection key ready"
         : pairing.status === "error"
-          ? "Could not retrieve auth"
-          : "Get Bridge auth";
+          ? "The Bridge did not respond"
+          : "Connect Flipforge to your Bridge";
+  const portLabel =
+    bridgePort.status === "checking"
+      ? "Scanning USB…"
+      : bridgePort.status === "detected"
+        ? "Board detected"
+        : bridgePort.status === "multiple"
+          ? "Multiple boards detected"
+          : bridgePort.status === "unsupported"
+            ? "USB unavailable"
+            : "Board not detected";
+  const retrieveLabel =
+    pairing.status === "requesting"
+      ? "Reading protected key…"
+      : bridgePort.status === "detected"
+        ? "Get auth from detected board"
+        : "Choose Bridge and get auth";
   const maskedCredential = credential
     ? `FFPAIR1 ${credential.ssid} •••••••••••••••• ••••••••••••••••••••••••••••••••`
     : "";
@@ -688,14 +782,37 @@ function BridgeAuthPanel({
         </>
       ) : (
         <>
-          <div className="auth-instruction">
-            <span>1</span>
-            <p>Run Bridge firmware, hold BOOT for two seconds, and keep holding it.</p>
+          <div className={`auth-device-state device-${bridgePort.status}`} aria-live="polite">
+            <span className="device-state-dot" aria-hidden="true" />
+            <div>
+              <small>USB STATUS</small>
+              <strong>{portLabel}</strong>
+              <p>{bridgePort.detail}</p>
+            </div>
+            <button onClick={onRescan} disabled={!compatible || disabled || bridgePort.status === "checking"}>
+              <RefreshCw /> Scan again
+            </button>
           </div>
+
+          <ol className="auth-guide">
+            <li>
+              <span>1</span>
+              <div><strong>Start the Bridge normally</strong><p>Press RESET once. Do not put the board in bootloader mode.</p></div>
+            </li>
+            <li>
+              <span>2</span>
+              <div><strong>Open the pairing window</strong><p>Hold BOOT for two seconds, then keep holding it.</p></div>
+            </li>
+            <li>
+              <span>3</span>
+              <div><strong>Retrieve the key</strong><p>Keep holding BOOT until the site confirms that the key is ready.</p></div>
+            </li>
+          </ol>
+
           <button className="auth-retrieve" onClick={onRetrieve} disabled={!compatible || disabled}>
-            <KeyRound />{pairing.status === "requesting" ? "Getting auth…" : "Get Bridge auth"}
+            <KeyRound />{retrieveLabel}
           </button>
-          <p className="auth-note"><ShieldCheck /> Local USB only. Nothing is uploaded or saved by this site.</p>
+          <p className="auth-note"><ShieldCheck /> First use requires browser approval. After that, this page detects the board automatically. The key stays local and is never saved.</p>
         </>
       )}
     </section>
