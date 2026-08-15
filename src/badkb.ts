@@ -1,5 +1,6 @@
 export type BadKBTarget = "ios" | "windows" | "macos" | "linux" | "universal";
 export type BadKBLayout = "us" | "uk" | "de" | "fr" | "es";
+export type BadKBFocusDirection = "forward" | "backward";
 export type BadKBIssueSeverity = "error" | "warning" | "info";
 
 export interface BadKBIssue {
@@ -216,6 +217,15 @@ export function makeHotkeySnippet(keys: string[]): string {
   const normalized = keys.map((key) => key.trim().toUpperCase()).filter(Boolean).join(" ");
   if (!isSafeKeySequence(normalized)) throw new Error("Choose modifiers followed by one letter, number, or supported key.");
   return normalized;
+}
+
+export function makeFocusNavigationSnippet(direction: BadKBFocusDirection, count: number): string {
+  if (!Number.isInteger(count) || count < 1 || count > 50) {
+    throw new Error("Focus movement must be between 1 and 50 steps.");
+  }
+
+  const command = direction === "backward" ? "SHIFT TAB" : "TAB";
+  return count === 1 ? command : `${command}\nREPEAT ${count - 1}`;
 }
 
 export function getBadKBTemplates(target: BadKBTarget): BadKBTemplate[] {

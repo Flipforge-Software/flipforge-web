@@ -12,11 +12,13 @@ import {
   Keyboard,
   Link,
   ListChecks,
+  LocateFixed,
   GripVertical,
   ArrowDown,
   ArrowUp,
   CopyPlus,
   Plus,
+  Route,
   Save,
   ShieldCheck,
   SlidersHorizontal,
@@ -32,18 +34,22 @@ import {
   formatBadKBDuration,
   getBadKBTemplates,
   makeHotkeySnippet,
+  makeFocusNavigationSnippet,
   makeOpenAppSnippet,
   makeOpenURLSnippet,
   makeTextSnippet,
   sanitizeBadKBFileName,
   type BadKBLayout,
+  type BadKBFocusDirection,
   type BadKBIssue,
   type BadKBTarget,
 } from "../badkb";
 import "../badkb.css";
 
 type BuilderMode = "simple" | "advanced";
-type BuilderTool = "text" | "url" | "app" | "delay" | "hotkey" | "key";
+type BuilderTool = "text" | "url" | "app" | "delay" | "hotkey" | "key" | "navigate";
+type NavigationDestination = "app" | "website" | "current";
+type NavigationFinish = "open" | "activate";
 
 interface SavedProject {
   id: string;
@@ -78,13 +84,14 @@ const BLOCK_DEFAULTS: Record<BuilderTool, string> = {
   delay: "1000",
   hotkey: "GUI SPACE",
   key: "ENTER",
+  navigate: "forward|1",
 };
 
 function isSimpleBlock(value: unknown): value is SimpleBlock {
   if (!value || typeof value !== "object") return false;
   const entry = value as Partial<SimpleBlock>;
   return typeof entry.id === "string" &&
-    ["text", "url", "app", "delay", "hotkey", "key"].includes(entry.type ?? "") &&
+    ["text", "url", "app", "delay", "hotkey", "key", "navigate"].includes(entry.type ?? "") &&
     typeof entry.value === "string";
 }
 
@@ -102,6 +109,11 @@ function compileSimpleBlock(block: SimpleBlock, target: BadKBTarget): CompiledSi
       return { snippet: `DELAY ${duration}`, error: null };
     }
     if (block.type === "hotkey") return { snippet: makeHotkeySnippet(block.value.split(/\s+/)), error: null };
+    if (block.type === "navigate") {
+      const [directionValue, countValue] = block.value.split("|");
+      const direction: BadKBFocusDirection = directionValue === "backward" ? "backward" : "forward";
+      return { snippet: makeFocusNavigationSnippet(direction, Number(countValue)), error: null };
+    }
     return { snippet: block.value, error: null };
   } catch (reason) {
     return { snippet: "", error: reason instanceof Error ? reason.message : "This block needs attention." };
@@ -134,6 +146,7 @@ function blockLabel(type: BuilderTool): string {
   if (type === "app") return "Open app";
   if (type === "delay") return "Wait";
   if (type === "hotkey") return "Keyboard shortcut";
+  if (type === "navigate") return "Move focus";
   return "Press key";
 }
 
@@ -143,6 +156,7 @@ function blockDescription(type: BuilderTool): string {
   if (type === "app") return "Finds an installed app";
   if (type === "delay") return "Pauses the sequence";
   if (type === "hotkey") return "Presses multiple keys together";
+  if (type === "navigate") return "Moves through on-screen controls";
   return "Presses one supported key";
 }
 
@@ -152,6 +166,7 @@ function blockIcon(type: BuilderTool): React.ReactNode {
   if (type === "app") return <AppWindow />;
   if (type === "delay") return <Timer />;
   if (type === "hotkey") return <KeyRound />;
+  if (type === "navigate") return <Route />;
   return <Keyboard />;
 }
 
@@ -171,6 +186,14 @@ export default function BadKBBuilder() {
   const [keyValue, setKeyValue] = useState("ENTER");
   const [simpleBlocks, setSimpleBlocks] = useState<SimpleBlock[]>([]);
   const [simpleSequenceActive, setSimpleSequenceActive] = useState(false);
+  const [showNavigationAssistant, setShowNavigationAssistant] = useState(false);
+  const [navigationDestination, setNavigationDestination] = useState<NavigationDestination>("app");
+  const [navigationFinish, setNavigationFinish] = useState<NavigationFinish>("open");
+  const [navigationApp, setNavigationApp] = useState("Notes");
+  const [navigationURL, setNavigationURL] = useState("https://docs.flipper.net/bad-usb");
+  const [navigationDirection, setNavigationDirection] = useState<BadKBFocusDirection>("forward");
+  const [navigationCount, setNavigationCount] = useState("1");
+  const [fullKeyboardAccessConfirmed, setFullKeyboardAccessConfirmed] = useState(false);
   const [draggedBlockID, setDraggedBlockID] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>(loadProjects);
@@ -191,6 +214,13 @@ export default function BadKBBuilder() {
   const hasUnsyncedAdvancedScript = !simpleSequenceActive && simpleBlocks.length === 0 && analysis.commandCount > 0;
   const canExportProject = analysis.canExport && (mode === "advanced" || (simpleSequenceActive && simpleBlocks.length > 0 && simpleErrorCount === 0));
   const projectErrorCount = errorCount + (mode === "simple" ? simpleErrorCount : 0);
+  const navigationNeedsFullKeyboardAccess = navigationFinish === "activate" || navigationDestination === "current";
+  const navigationStepCount = Number(navigationCount);
+  const navigationStepCountIsValid = Number.isInteger(navigationStepCount) && navigationStepCount >= 1 && navigationStepCount <= 50;
+  const navigationDestinationIsReady = navigationDestination === "current" ||
+    (navigationDestination === "app" ? Boolean(navigationApp.trim()) : Boolean(navigationURL.trim()));
+  const canAddNavigationRoute = navigationDestinationIsReady && (!navigationNeedsFullKeyboardAccess || navigationStepCountIsValid) &&
+    (!navigationNeedsFullKeyboardAccess || fullKeyboardAccessConfirmed);
 
   useEffect(() => {
     if (!notice) return;
@@ -392,6 +422,46 @@ export default function BadKBBuilder() {
     setNotice(`${type === "url" ? "Website" : type === "delay" ? "Wait" : type[0].toUpperCase() + type.slice(1)} block added.`);
   };
 
+  const addNavigationRoute = () => {
+    if (hasUnsyncedAdvancedScript) {
+      setNotice("Start a new visual sequence or return to Advanced mode first.");
+      return;
+    }
+
+    try {
+      if (navigationDestination === "app") makeOpenAppSnippet("ios", navigationApp);
+      if (navigationDestination === "website") makeOpenURLSnippet("ios", navigationURL);
+      if (navigationNeedsFullKeyboardAccess) {
+        if (!fullKeyboardAccessConfirmed) throw new Error("Confirm Full Keyboard Access before adding focus navigation.");
+        makeFocusNavigationSnippet(navigationDirection, navigationStepCount);
+      }
+
+      const route: SimpleBlock[] = [];
+      if (navigationDestination === "app") {
+        route.push({ id: crypto.randomUUID(), type: "app", value: navigationApp.trim() });
+        route.push({ id: crypto.randomUUID(), type: "delay", value: "1000" });
+      } else if (navigationDestination === "website") {
+        route.push({ id: crypto.randomUUID(), type: "url", value: navigationURL.trim() });
+        route.push({ id: crypto.randomUUID(), type: "delay", value: "1000" });
+      } else {
+        route.push({ id: crypto.randomUUID(), type: "delay", value: "1000" });
+      }
+
+      if (navigationNeedsFullKeyboardAccess) {
+        route.push({ id: crypto.randomUUID(), type: "navigate", value: `${navigationDirection}|${navigationStepCount}` });
+        route.push({ id: crypto.randomUUID(), type: "key", value: "SPACE" });
+      }
+
+      if (!route.length) throw new Error("Choose something for this route to do.");
+      changeTarget("ios");
+      setSimpleBlocks((blocks) => [...blocks, ...route]);
+      setSimpleSequenceActive(true);
+      setNotice(`Added ${route.length} compatible iPhone ${route.length === 1 ? "step" : "steps"}.`);
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : "That navigation route could not be added.");
+    }
+  };
+
   const startVisualSequence = () => {
     setScript(INITIAL_SCRIPT);
     setSimpleBlocks([]);
@@ -503,11 +573,84 @@ export default function BadKBBuilder() {
           {mode === "simple" ? (
             <section className="badkb-simple-builder" aria-labelledby="simple-builder-title">
               <div className="badkb-section-heading"><span>VISUAL BUILDER</span><strong id="simple-builder-title">Build with blocks</strong></div>
+              <section className={`badkb-navigation-assistant${showNavigationAssistant ? " is-open" : ""}`} aria-labelledby="navigation-assistant-title">
+                <header>
+                  <span className="badkb-navigation-mark"><LocateFixed /></span>
+                  <span><small>iPHONE / iPAD</small><strong id="navigation-assistant-title">Navigation Assistant</strong><p>Build a keyboard-compatible route into an app, website, or focused control.</p></span>
+                  <button onClick={() => setShowNavigationAssistant((visible) => !visible)} aria-expanded={showNavigationAssistant}>
+                    {showNavigationAssistant ? "Close" : "Plan route"}<ChevronRight />
+                  </button>
+                </header>
+
+                {showNavigationAssistant && (
+                  <div className="badkb-navigation-panel">
+                    <div className="badkb-navigation-fields">
+                      <fieldset>
+                        <legend>1. STARTING POINT</legend>
+                        <div className="badkb-navigation-options" aria-label="Navigation starting point">
+                          {(["app", "website", "current"] as NavigationDestination[]).map((destination) => (
+                            <button
+                              key={destination}
+                              className={navigationDestination === destination ? "active" : ""}
+                              onClick={() => {
+                                setNavigationDestination(destination);
+                                if (destination === "current") setNavigationFinish("activate");
+                              }}
+                              aria-pressed={navigationDestination === destination}
+                            >{destination === "app" ? "Open app" : destination === "website" ? "Open website" : "Current screen"}</button>
+                          ))}
+                        </div>
+                        {navigationDestination === "app" && <label><span>APP NAME</span><input value={navigationApp} onChange={(event) => setNavigationApp(event.target.value)} maxLength={80} placeholder="Notes" /></label>}
+                        {navigationDestination === "website" && <label><span>WEB ADDRESS</span><input type="url" value={navigationURL} onChange={(event) => setNavigationURL(event.target.value)} placeholder="https://example.com" /></label>}
+                        {navigationDestination === "current" && <p className="badkb-navigation-note">Start with the screen already open and the first focusable control selected.</p>}
+                      </fieldset>
+
+                      <fieldset>
+                        <legend>2. FINISH</legend>
+                        <div className="badkb-navigation-options" aria-label="Navigation finish">
+                          {navigationDestination !== "current" && <button className={navigationFinish === "open" ? "active" : ""} onClick={() => setNavigationFinish("open")} aria-pressed={navigationFinish === "open"}>Open only</button>}
+                          <button className={navigationFinish === "activate" ? "active" : ""} onClick={() => setNavigationFinish("activate")} aria-pressed={navigationFinish === "activate"}>Move + select</button>
+                        </div>
+                        {navigationNeedsFullKeyboardAccess ? (
+                          <div className="badkb-focus-controls">
+                            <label><span>DIRECTION</span><select value={navigationDirection} onChange={(event) => setNavigationDirection(event.target.value as BadKBFocusDirection)}><option value="forward">Forward</option><option value="backward">Backward</option></select></label>
+                            <label><span>FOCUS STEPS</span><input type="number" min="1" max="50" value={navigationCount} onChange={(event) => setNavigationCount(event.target.value)} /></label>
+                          </div>
+                        ) : <p className="badkb-navigation-note">Opens the destination and stops. No accessibility setting is required.</p>}
+                      </fieldset>
+                    </div>
+
+                    {navigationNeedsFullKeyboardAccess && (
+                      <div className="badkb-fka-confirmation">
+                        <label>
+                          <input type="checkbox" checked={fullKeyboardAccessConfirmed} onChange={(event) => setFullKeyboardAccessConfirmed(event.target.checked)} />
+                          <span><strong>Full Keyboard Access is enabled</strong><small>Settings → Accessibility → Keyboards &amp; Typing → Full Keyboard Access</small></span>
+                        </label>
+                        <p>Apple uses Tab to move forward, Shift-Tab to move backward, and Space to activate. Focus order depends on the current app, so test once and adjust the step count.</p>
+                      </div>
+                    )}
+
+                    <div className="badkb-route-preview" aria-label="Route preview">
+                      <span className="badkb-route-status">{navigationNeedsFullKeyboardAccess ? "REQUIRES FULL KEYBOARD ACCESS" : "STANDARD iOS KEYBOARD"}</span>
+                      <div>
+                        <span>{navigationDestination === "app" ? navigationApp.trim() || "App" : navigationDestination === "website" ? "Website" : "Current screen"}</span>
+                        {navigationNeedsFullKeyboardAccess && <><ChevronRight />{Array.from({ length: Math.min(navigationStepCountIsValid ? navigationStepCount : 1, 4) }, (_, index) => <span key={index}>{String(index + 1).padStart(2, "0")}</span>)}{navigationStepCount > 4 && <small>+{navigationStepCount - 4}</small>}<ChevronRight /><span className="target">Select</span></>}
+                      </div>
+                      <small>This previews keyboard focus, not the phone screen. It never guesses coordinates or reads what is selected.</small>
+                    </div>
+
+                    <footer>
+                      <span><ShieldCheck /> Uses documented iOS keyboard actions only</span>
+                      <button className="primary" onClick={addNavigationRoute} disabled={!canAddNavigationRoute}><Route /> Add route to sequence</button>
+                    </footer>
+                  </div>
+                )}
+              </section>
               <div className="badkb-block-workspace">
                 <aside className="badkb-block-library" aria-label="Action library">
                   <div><span>ACTION LIBRARY</span><strong>What should happen?</strong><small>Tap a block to add it to the bottom of your sequence.</small></div>
                   <nav id="badkb-block-library">
-                    {(["text", "url", "app", "delay", "hotkey", "key"] as BuilderTool[]).map((type) => (
+                    {(["text", "url", "app", "navigate", "delay", "hotkey", "key"] as BuilderTool[]).map((type) => (
                       <button key={type} onClick={() => addSimpleBlock(type)} disabled={hasUnsyncedAdvancedScript}>
                         <span>{blockIcon(type)}</span><span><strong>{blockLabel(type)}</strong><small>{blockDescription(type)}</small></span><Plus />
                       </button>
@@ -547,6 +690,13 @@ export default function BadKBBuilder() {
                                 {block.type === "app" && <input value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} maxLength={80} aria-label={`App for step ${index + 1}`} />}
                                 {block.type === "delay" && <label><input type="number" min="0" max="600000" value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} aria-label={`Wait time for step ${index + 1}`} /><small>MS</small></label>}
                                 {block.type === "hotkey" && <input value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} aria-label={`Shortcut for step ${index + 1}`} />}
+                                {block.type === "navigate" && (() => {
+                                  const [directionValue, countValue] = block.value.split("|");
+                                  return <div className="badkb-block-focus-inputs">
+                                    <select value={directionValue === "backward" ? "backward" : "forward"} onChange={(event) => updateSimpleBlock(block.id, `${event.target.value}|${countValue || "1"}`)} aria-label={`Direction for step ${index + 1}`}><option value="forward">Forward</option><option value="backward">Backward</option></select>
+                                    <label><input type="number" min="1" max="50" value={countValue ?? "1"} onChange={(event) => updateSimpleBlock(block.id, `${directionValue === "backward" ? "backward" : "forward"}|${event.target.value}`)} aria-label={`Focus moves for step ${index + 1}`} /><small>STEPS</small></label>
+                                  </div>;
+                                })()}
                                 {block.type === "key" && <select value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} aria-label={`Key for step ${index + 1}`}>{KEY_OPTIONS.map((key) => <option key={key}>{key}</option>)}</select>}
                                 {compiled?.error && <p><AlertTriangle /> {compiled.error}</p>}
                               </div>

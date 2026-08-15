@@ -3,6 +3,7 @@ import {
   analyzeBadKBScript,
   buildBadKBExport,
   formatBadKBDuration,
+  makeFocusNavigationSnippet,
   makeHotkeySnippet,
   makeOpenAppSnippet,
   makeOpenURLSnippet,
@@ -65,6 +66,14 @@ describe("BadKB command builders", () => {
   it("builds safe hotkeys", () => {
     expect(makeHotkeySnippet(["ctrl", "shift", "p"])).toBe("CTRL SHIFT P");
     expect(() => makeHotkeySnippet(["ctrl", "unknown-key"])).toThrow("supported key");
+  });
+
+  it("builds bounded Full Keyboard Access focus movement", () => {
+    expect(makeFocusNavigationSnippet("forward", 1)).toBe("TAB");
+    expect(makeFocusNavigationSnippet("forward", 3)).toBe("TAB\nREPEAT 2");
+    expect(makeFocusNavigationSnippet("backward", 3)).toBe("SHIFT TAB\nREPEAT 2");
+    expect(() => makeFocusNavigationSnippet("forward", 0)).toThrow("between 1 and 50");
+    expect(() => makeFocusNavigationSnippet("backward", 51)).toThrow("between 1 and 50");
   });
 
   it("sanitizes export filenames and formats duration", () => {
