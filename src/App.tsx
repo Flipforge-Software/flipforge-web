@@ -313,48 +313,61 @@ function HomePage({ onOpenFlash }: { onOpenFlash: () => void }) {
     <main className="home-page">
       <section className="home-hero">
         <div className="hero-copy">
-          <p className="lcd-kicker">FLIPFORGE BRIDGE / READY</p>
-          <h1>Your Flipper.<br />More connected.</h1>
-          <p>Use the Wi-Fi Devboard as a private local bridge to Flipforge, then restore the original firmware whenever you want.</p>
+          <p className="lcd-kicker">FLIPPER ZERO / WI-FI DEVBOARD</p>
+          <h1>FLIPFORGE</h1>
+          <p>A private local bridge between your Flipper and iPhone. Fast when you need it, reversible when you do not.</p>
           <div className="hero-actions">
-            <button className="hero-primary" onClick={onOpenFlash}>OPEN FLASHER <ArrowRight /></button>
+            <button className="hero-primary" onClick={onOpenFlash}>INSTALL BRIDGE <ArrowRight /></button>
             <a href="#how">HOW IT WORKS</a>
           </div>
         </div>
         <div className="device-stage">
-          <div className="screen-message" aria-hidden="true">
-            <span>FLIPFORGE</span>
-            <strong>READY</strong>
-            <i>•••</i>
-          </div>
+          <span className="device-halo" aria-hidden="true" />
           <img src="/assets/flipper-device.png" alt="Flipper Zero running the Flipforge bridge" />
-          <span className="device-shadow" />
-        </div>
-        <div className="hero-ticker" aria-hidden="true">
-          <span>LOCAL WI-FI</span><i />
-          <span>FAST TRANSFERS</span><i />
-          <span>ONE-CLICK RESTORE</span>
+          <span className="device-signal" aria-hidden="true"><i /><i /><i /></span>
         </div>
       </section>
 
       <section className="home-proof" id="how">
         <div className="proof-heading">
-          <p className="eyebrow">ONE BOARD / TWO MODES</p>
-          <h2>Connected when you want it.<br />Original when you need it.</h2>
+          <p className="eyebrow">HOW IT WORKS</p>
+          <h2>One board.<br />Two clean modes.</h2>
+          <p className="proof-summary">Install Flipforge Bridge for the mobile app, then return to the original firmware whenever you want.</p>
         </div>
         <div className="proof-steps">
-          <article><span>01</span><Wifi /><h3>Install Bridge</h3><p>Flash the board from Chrome or Edge over USB.</p></article>
-          <article><span>02</span><Zap /><h3>Pair Locally</h3><p>Connect Flipforge to your board over its private Wi-Fi link.</p></article>
-          <article><span>03</span><RotateCcw /><h3>Restore Anytime</h3><p>Return to Flipper’s original Blackmagic firmware from the same tool.</p></article>
+          <article><span>01</span><Wifi /><h3>Install in browser</h3><p>Connect the Wi-Fi Devboard by USB and flash it directly from Chrome or Edge.</p></article>
+          <article><span>02</span><Zap /><h3>Connect locally</h3><p>Pair Flipforge over the board’s private Wi-Fi link. No cloud relay is involved.</p></article>
+          <article><span>03</span><RotateCcw /><h3>Restore anytime</h3><p>Use the same flasher to return to Flipper’s original Blackmagic firmware.</p></article>
+        </div>
+      </section>
+
+      <section className="home-modes" aria-labelledby="modes-title">
+        <div className="modes-heading">
+          <p className="eyebrow">REVERSIBLE BY DESIGN</p>
+          <h2 id="modes-title">Bridge in.<br />Flash back.</h2>
+        </div>
+        <div className="mode-lines">
+          <article>
+            <span>BRIDGE MODE</span>
+            <h3>Built for Flipforge</h3>
+            <p>Local Wi-Fi connectivity and faster transfers between the Devboard and mobile app.</p>
+            <Wifi />
+          </article>
+          <article>
+            <span>ORIGINAL MODE</span>
+            <h3>Built for Flipper</h3>
+            <p>Restore the official board firmware when you want its original debugging workflow back.</p>
+            <RotateCcw />
+          </article>
         </div>
       </section>
 
       <section className="home-cta">
         <div>
-          <p className="lcd-kicker">ESP32-S2 / USB</p>
-          <h2>Ready to connect?</h2>
+          <p className="eyebrow">ESP32-S2 / USB</p>
+          <h2>Start with your Devboard.</h2>
         </div>
-        <button onClick={onOpenFlash}>FLASH YOUR DEVBOARD <ArrowRight /></button>
+        <button onClick={onOpenFlash}>OPEN FLASHER <ArrowRight /></button>
       </section>
     </main>
   );
