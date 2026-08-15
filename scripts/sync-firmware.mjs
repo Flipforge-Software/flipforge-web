@@ -8,6 +8,8 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputRoot = resolve(projectRoot, "public", "firmware");
 const officialIndexUrl = "https://update.flipperzero.one/blackmagic-firmware/directory.json";
 const bridgeReleaseUrl = "https://api.github.com/repos/Flipforge-Software/flipforge-bridge/releases/latest";
+const marauderReleaseUrl = "https://api.github.com/repos/justcallmekoko/ESP32Marauder/releases/latest";
+const appIdentityLength = 0x100;
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -50,25 +52,54 @@ function safeVersion(value) {
   return value;
 }
 
-async function writeTargetFiles(id, version, archive, expectedFiles) {
-  const entries = extractTarGz(archive);
+async function writeBinaryTargetFiles(id, version, files) {
   const versionDirectory = resolve(outputRoot, id, version);
   await mkdir(versionDirectory, { recursive: true });
   const segments = [];
-  for (const expected of expectedFiles) {
-    const bytes = entries.get(expected.archivePath);
-    if (!bytes?.length) throw new Error(`Required firmware image is missing: ${expected.archivePath}`);
-    const outputPath = resolve(versionDirectory, expected.outputName);
+  let appIdentitySha256 = "";
+  for (const file of files) {
+    if (!file.bytes?.length) throw new Error(`Required firmware image is missing: ${file.outputName}`);
+    const outputPath = resolve(versionDirectory, file.outputName);
+    const bytes = file.bytes;
     await writeFile(outputPath, bytes);
     segments.push({
-      name: expected.name,
-      address: expected.address,
-      path: `firmware/${id}/${version}/${expected.outputName}`,
+      name: file.name,
+      address: file.address,
+      path: `firmware/${id}/${version}/${file.outputName}`,
       size: bytes.length,
       sha256: sha256(bytes),
     });
+    if (file.appIdentity) appIdentitySha256 = sha256(bytes.subarray(0, appIdentityLength));
   }
-  return segments;
+  if (!appIdentitySha256) throw new Error(`Application identity is missing for ${id}.`);
+  return { segments, appIdentitySha256 };
+}
+
+async function writeTargetFiles(id, version, archive, expectedFiles) {
+  const entries = extractTarGz(archive);
+  return writeBinaryTargetFiles(id, version, expectedFiles.map((expected) => ({
+    ...expected,
+    bytes: entries.get(expected.archivePath),
+  })));
+}
+
+function publishedAssetHash(asset) {
+  const match = /^sha256:([a-f0-9]{64})$/.exec(asset?.digest ?? "");
+  if (!match) throw new Error(`Release asset is missing a published SHA-256 digest: ${asset?.name ?? "unknown"}`);
+  return match[1];
+}
+
+async function downloadVerifiedReleaseAsset(asset, expectedHash, expectedSize) {
+  if (!asset?.browser_download_url || asset.size !== expectedSize || publishedAssetHash(asset) !== expectedHash) {
+    throw new Error(`Release metadata does not match the Marauder manifest: ${asset?.name ?? "unknown"}`);
+  }
+  const bytes = Buffer.from(await (await fetchChecked(asset.browser_download_url, {
+    headers: { Accept: "application/octet-stream" },
+  })).arrayBuffer());
+  if (bytes.length !== expectedSize || sha256(bytes) !== expectedHash) {
+    throw new Error(`Marauder release asset failed verification: ${asset.name}`);
+  }
+  return bytes;
 }
 
 async function loadBridge() {
@@ -83,10 +114,10 @@ async function loadBridge() {
   const expectedHash = checksumText.trim().split(/\s+/)[0];
   const actualHash = sha256(archive);
   if (actualHash !== expectedHash) throw new Error("Bridge release archive failed SHA-256 verification.");
-  const segments = await writeTargetFiles("bridge", version, archive, [
+  const { segments, appIdentitySha256 } = await writeTargetFiles("bridge", version, archive, [
     { name: "Bootloader", address: 0x1000, archivePath: "bootloader/bootloader.bin", outputName: "bootloader.bin" },
     { name: "Partition table", address: 0x8000, archivePath: "partition_table/partition-table.bin", outputName: "partition-table.bin" },
-    { name: "Flipforge Bridge", address: 0x10000, archivePath: "flipforge_bridge.bin", outputName: "flipforge-bridge.bin" },
+    { name: "Flipforge Bridge", address: 0x10000, archivePath: "flipforge_bridge.bin", outputName: "flipforge-bridge.bin", appIdentity: true },
   ]);
   return {
     id: "bridge",
@@ -97,6 +128,82 @@ async function loadBridge() {
     sourceName: "Flipforge Software",
     sourceUrl: release.html_url,
     archiveSha256: actualHash,
+    appIdentitySha256,
+    eraseAll: false,
+    chip: "ESP32-S2",
+    flashMode: "dio",
+    flashFrequency: "80m",
+    flashSize: "4MB",
+    segments,
+  };
+}
+
+async function loadMarauder() {
+  const release = await (await fetchChecked(marauderReleaseUrl)).json();
+  const version = safeVersion(String(release.tag_name ?? "").replace(/^v/, ""));
+  const manifestAsset = release.assets?.find((asset) => asset.name === "firmware-manifest.json");
+  if (!manifestAsset) throw new Error("Marauder release is missing its firmware manifest.");
+  const manifestHash = publishedAssetHash(manifestAsset);
+  const manifestBytes = await downloadVerifiedReleaseAsset(manifestAsset, manifestHash, manifestAsset.size);
+  const manifest = JSON.parse(manifestBytes.toString("utf8"));
+  const target = manifest.targets?.find((candidate) => candidate.id === "flipper-zero-wifi-dev-board");
+  if (
+    manifest.schemaVersion !== 1 ||
+    manifest.metadataStatus !== "authoritative" ||
+    manifest.sourceRepository !== "justcallmekoko/ESP32Marauder" ||
+    manifest.version !== release.tag_name ||
+    target?.chipFamily !== "ESP32-S2" ||
+    target?.esptoolChip !== "esp32s2" ||
+    target?.flash?.sizeBytes !== 4 * 1024 * 1024 ||
+    target?.flash?.mode !== "dio" ||
+    target?.flash?.frequency !== "80m" ||
+    target?.flash?.factory?.erase !== true ||
+    target?.flash?.factory?.preservesUserData !== false
+  ) {
+    throw new Error("Marauder release metadata is not compatible with the Flipper Wi-Fi Dev Board.");
+  }
+
+  const roleConfig = new Map([
+    ["bootloader", { name: "Bootloader", address: 0x1000, outputName: "bootloader.bin" }],
+    ["partition-table", { name: "Partition table", address: 0x8000, outputName: "partition-table.bin" }],
+    ["ota-data", { name: "OTA data", address: 0xe000, outputName: "ota-data.bin" }],
+    ["application", { name: "ESP32 Marauder", address: 0x10000, outputName: "esp32-marauder.bin", appIdentity: true }],
+  ]);
+  const factorySegments = target.flash.factory.segments;
+  if (!Array.isArray(factorySegments) || factorySegments.length !== roleConfig.size) {
+    throw new Error("Marauder factory image set is incomplete.");
+  }
+
+  const files = [];
+  const seenRoles = new Set();
+  for (const segment of factorySegments) {
+    const config = roleConfig.get(segment.role);
+    if (!config || seenRoles.has(segment.role) || segment.offset !== config.address) {
+      throw new Error("Marauder factory flash offsets were rejected.");
+    }
+    if (!/^[a-f0-9]{64}$/.test(segment.sha256 ?? "") || !Number.isSafeInteger(segment.size) || segment.size <= 0) {
+      throw new Error("Marauder firmware segment metadata is invalid.");
+    }
+    const asset = release.assets?.find((candidate) => candidate.name === segment.fileName);
+    files.push({
+      ...config,
+      bytes: await downloadVerifiedReleaseAsset(asset, segment.sha256, segment.size),
+    });
+    seenRoles.add(segment.role);
+  }
+
+  const { segments, appIdentitySha256 } = await writeBinaryTargetFiles("marauder", version, files);
+  return {
+    id: "marauder",
+    name: "ESP32 Marauder",
+    shortName: "Marauder",
+    version,
+    description: "Install Marauder tools for Wi-Fi hardware you own or are authorized to test.",
+    sourceName: "ESP32 Marauder",
+    sourceUrl: release.html_url,
+    archiveSha256: manifestHash,
+    appIdentitySha256,
+    eraseAll: true,
     chip: "ESP32-S2",
     flashMode: "dio",
     flashFrequency: "80m",
@@ -115,10 +222,10 @@ async function loadOfficial() {
   const archive = Buffer.from(await (await fetchChecked(file.url, { headers: { Accept: "application/octet-stream" } })).arrayBuffer());
   const actualHash = sha256(archive);
   if (actualHash !== file.sha256) throw new Error("Official Devboard archive failed SHA-256 verification.");
-  const segments = await writeTargetFiles("official", version, archive, [
+  const { segments, appIdentitySha256 } = await writeTargetFiles("official", version, archive, [
     { name: "Bootloader", address: 0x1000, archivePath: "bootloader.bin", outputName: "bootloader.bin" },
     { name: "Partition table", address: 0x8000, archivePath: "partition-table.bin", outputName: "partition-table.bin" },
-    { name: "Original firmware", address: 0x10000, archivePath: "blackmagic.bin", outputName: "blackmagic.bin" },
+    { name: "Original firmware", address: 0x10000, archivePath: "blackmagic.bin", outputName: "blackmagic.bin", appIdentity: true },
   ]);
   return {
     id: "official",
@@ -129,6 +236,8 @@ async function loadOfficial() {
     sourceName: "Flipper Devices",
     sourceUrl: file.url,
     archiveSha256: actualHash,
+    appIdentitySha256,
+    eraseAll: false,
     chip: "ESP32-S2",
     flashMode: "dio",
     flashFrequency: "80m",
@@ -139,7 +248,7 @@ async function loadOfficial() {
 
 await rm(outputRoot, { recursive: true, force: true });
 await mkdir(outputRoot, { recursive: true });
-const [bridge, official] = await Promise.all([loadBridge(), loadOfficial()]);
-const catalog = { schemaVersion: 1, generatedAt: new Date().toISOString(), targets: [bridge, official] };
+const [bridge, marauder, official] = await Promise.all([loadBridge(), loadMarauder(), loadOfficial()]);
+const catalog = { schemaVersion: 2, generatedAt: new Date().toISOString(), targets: [bridge, marauder, official] };
 await writeFile(resolve(outputRoot, "manifest.json"), `${JSON.stringify(catalog, null, 2)}\n`);
-console.log(`Firmware catalog ready: Bridge ${bridge.version}, official ${official.version}`);
+console.log(`Firmware catalog ready: Bridge ${bridge.version}, Marauder ${marauder.version}, official ${official.version}`);

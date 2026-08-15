@@ -8,6 +8,7 @@ import {
   EyeOff,
   ExternalLink,
   KeyRound,
+  Radar,
   RefreshCw,
   RotateCcw,
   ScanSearch,
@@ -36,7 +37,7 @@ import BadKBBuilder from "./components/BadKBBuilder";
 type Phase = "prepare" | "detecting" | "pairing" | "flashing" | "complete" | "error";
 type SiteTab = "home" | "flash" | "badkb";
 type DetectionState = {
-  status: "idle" | "detecting" | "bridge" | "official" | "unknown" | "error";
+  status: "idle" | "detecting" | "bridge" | "marauder" | "official" | "unknown" | "error";
   detail: string;
   version?: string;
 };
@@ -64,6 +65,18 @@ const bootSteps = [
   "Connect the board directly to this computer with USB-C.",
   "Hold BOOT, tap RESET, then release BOOT.",
 ];
+
+const firmwareNames: Record<FirmwareId, string> = {
+  bridge: "Flipforge Bridge",
+  marauder: "ESP32 Marauder",
+  official: "Original Flipper Firmware",
+};
+
+const installedFirmwareDetails: Record<FirmwareId, string> = {
+  bridge: "Flipforge Bridge is installed.",
+  marauder: "ESP32 Marauder is installed.",
+  official: "Official Blackmagic firmware is installed.",
+};
 
 function tabFromPath(): SiteTab {
   if (window.location.pathname.startsWith("/badkb")) return "badkb";
@@ -253,7 +266,7 @@ export default function App() {
     setProgressDetail("Waiting for your board");
     setError(null);
     setLogs([
-      `Mode set to ${next?.name ?? (id === "bridge" ? "Flipforge Bridge" : "Original Flipper Firmware")}.`,
+      `Mode set to ${next?.name ?? firmwareNames[id]}.`,
       "Complete the bootloader steps, then connect the serial port.",
     ]);
   };
@@ -281,17 +294,20 @@ export default function App() {
         },
         onLog: appendLog,
         onDeviceLost: () => appendLog("Serial device restarted."),
-      });
+      }, catalog?.targets ?? []);
 
       if (result.id === "bridge") {
         setDetection({ status: "bridge", detail: "Flipforge Bridge is installed.", version: result.version });
         appendLog(`Detected Flipforge Bridge ${result.version || "(version unavailable)"}.`);
+      } else if (result.id === "marauder") {
+        setDetection({ status: "marauder", detail: "ESP32 Marauder is installed.", version: result.version });
+        appendLog(`Detected ESP32 Marauder ${result.version || "(version unavailable)"}.`);
       } else if (result.id === "official") {
         setDetection({ status: "official", detail: "Official Blackmagic firmware is installed.", version: result.version });
         appendLog(`Detected stock Blackmagic firmware ${result.version || "(version unavailable)"}.`);
       } else {
         const project = result.projectName || "No valid ESP app identity";
-        setDetection({ status: "unknown", detail: `${project} is not recognized as Forge or stock.`, version: result.version });
+        setDetection({ status: "unknown", detail: `${project} is not recognized as Bridge, Marauder, or Blackmagic.`, version: result.version });
         appendLog(`Unknown firmware identity: ${project}.`);
       }
       setProgress(1);
@@ -392,7 +408,7 @@ export default function App() {
       setProgressDetail("Flash verified");
       setDetection({
         status: selected.id,
-        detail: selected.id === "bridge" ? "Flipforge Bridge is installed." : "Official Blackmagic firmware is installed.",
+        detail: installedFirmwareDetails[selected.id],
         version: selected.version,
       });
       appendLog(`${selected.shortName} ${selected.version} verified on ${result.chip}.`);
@@ -440,12 +456,14 @@ export default function App() {
                 ? "Auth stopped"
                 : detection.status === "bridge"
                   ? "Forge detected"
-                  : detection.status === "official"
-                    ? "Stock detected"
-                    : detection.status === "unknown"
-                      ? "Unknown firmware"
-                      : detection.status === "error"
-                        ? "Detection stopped"
+                  : detection.status === "marauder"
+                    ? "Marauder detected"
+                    : detection.status === "official"
+                      ? "Stock detected"
+                      : detection.status === "unknown"
+                        ? "Unknown firmware"
+                        : detection.status === "error"
+                          ? "Detection stopped"
             : "Ready";
 
   return (
@@ -461,7 +479,7 @@ export default function App() {
           <section className="flash-intro">
             <p className="eyebrow">DEVBOARD UTILITY</p>
             <h1>Flash your Wi-Fi Devboard.</h1>
-            <p>Install the mobile bridge or restore the original Flipper firmware.</p>
+            <p>Install Flipforge Bridge, ESP32 Marauder, or restore the original Flipper firmware.</p>
           </section>
 
           <div className="utility-grid">
@@ -518,6 +536,14 @@ export default function App() {
                   disabled={busy}
                 />
                 <ModeButton
+                  target={catalog?.targets.find((target) => target.id === "marauder")}
+                  selected={selectedId === "marauder"}
+                  icon={<Radar />}
+                  fallbackName="ESP32 Marauder"
+                  onClick={() => chooseMode("marauder")}
+                  disabled={busy}
+                />
+                <ModeButton
                   target={catalog?.targets.find((target) => target.id === "official")}
                   selected={selectedId === "official"}
                   icon={<RotateCcw />}
@@ -526,6 +552,13 @@ export default function App() {
                   disabled={busy}
                 />
               </div>
+
+              {selectedId === "marauder" && (
+                <div className="firmware-caution" role="note">
+                  <CircleAlert />
+                  <p><strong>Clean board flash</strong><span>Marauder’s verified factory install erases existing Wi-Fi board settings. It does not modify your Flipper or microSD card.</span></p>
+                </div>
+              )}
 
               <div className="firmware-meta">
                 <span><b>VERSION</b>{selected ? selected.version : "—"}</span>
@@ -566,7 +599,7 @@ export default function App() {
                       disabled={busy}
                     />
                     <span className="check-box"><Check /></span>
-                    <span>I completed all three steps</span>
+                    <span>{selectedId === "marauder" ? "I completed the steps and understand the board will be erased" : "I completed all three steps"}</span>
                   </label>
                   <button className="primary-action" onClick={startFlash} disabled={!selected || !confirmed || busy || Boolean(catalogError)}>
                     {phase === "flashing" ? "Flashing…" : `Connect & flash ${selected?.shortName ?? "firmware"}`}
@@ -649,20 +682,20 @@ function HomePage({ onOpenFlash }: { onOpenFlash: () => void }) {
       <section className="home-proof" id="how">
         <div className="proof-heading">
           <p className="eyebrow">HOW IT WORKS</p>
-          <h2>One board.<br />Two clean modes.</h2>
-          <p className="proof-summary">Install Flipforge Bridge for the mobile app, then return to the original firmware whenever you want.</p>
+          <h2>One board.<br />Three firmware paths.</h2>
+          <p className="proof-summary">Install Flipforge Bridge or ESP32 Marauder, then return to the original firmware whenever you want.</p>
         </div>
         <div className="proof-steps">
           <article><span>01</span><Wifi /><h3>Install in browser</h3><p>Connect the Wi-Fi Devboard by USB and flash it directly from Chrome or Edge.</p></article>
           <article><span>02</span><Zap /><h3>Connect locally</h3><p>Pair Flipforge over the board’s private Wi-Fi link. No cloud relay is involved.</p></article>
-          <article><span>03</span><RotateCcw /><h3>Restore anytime</h3><p>Use the same flasher to return to Flipper’s original Blackmagic firmware.</p></article>
+          <article><span>03</span><RotateCcw /><h3>Switch anytime</h3><p>Move between Bridge, Marauder, and Flipper’s original Blackmagic firmware.</p></article>
         </div>
       </section>
 
       <section className="home-modes" aria-labelledby="modes-title">
         <div className="modes-heading">
           <p className="eyebrow">REVERSIBLE BY DESIGN</p>
-          <h2 id="modes-title">Bridge in.<br />Flash back.</h2>
+          <h2 id="modes-title">Choose.<br />Flash. Switch.</h2>
         </div>
         <div className="mode-lines">
           <article>
@@ -670,6 +703,12 @@ function HomePage({ onOpenFlash }: { onOpenFlash: () => void }) {
             <h3>Built for Flipforge</h3>
             <p>Local Wi-Fi connectivity and faster transfers between the Devboard and mobile app.</p>
             <Wifi />
+          </article>
+          <article>
+            <span>MARAUDER MODE</span>
+            <h3>Built for Wi-Fi tools</h3>
+            <p>Install the verified ESP32-S2 build for authorized wireless assessment and Evil Portal workflows.</p>
+            <Radar />
           </article>
           <article>
             <span>ORIGINAL MODE</span>
@@ -731,15 +770,17 @@ function FirmwareDetector({
   const label =
     detection.status === "bridge"
       ? "Forge firmware"
-      : detection.status === "official"
-        ? "Stock firmware"
-        : detection.status === "unknown"
-          ? "Unknown firmware"
-          : detection.status === "error"
-            ? "Detection stopped"
-            : detection.status === "detecting"
-              ? "Reading firmware…"
-              : "Not checked";
+      : detection.status === "marauder"
+        ? "Marauder firmware"
+        : detection.status === "official"
+          ? "Stock firmware"
+          : detection.status === "unknown"
+            ? "Unknown firmware"
+            : detection.status === "error"
+              ? "Detection stopped"
+              : detection.status === "detecting"
+                ? "Reading firmware…"
+                : "Not checked";
 
   return (
     <section className={`firmware-detector detector-${detection.status}`} aria-label="Installed firmware detector" aria-live="polite">

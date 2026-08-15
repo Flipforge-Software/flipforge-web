@@ -194,7 +194,7 @@ h1, h2, h3, p { margin-top: 0; }
 .firmware-detector > button { min-height: 38px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text); background: var(--surface-raised); font: inherit; font-size: 10px; font-weight: 700; cursor: pointer; transition: border-color .18s ease, color .18s ease, transform .18s ease; }
 .firmware-detector > button:hover:not(:disabled) { color: var(--orange); border-color: rgba(255, 101, 52, .48); transform: translateY(-1px); }
 .firmware-detector > button:disabled { opacity: .35; cursor: not-allowed; }
-.detector-bridge .detector-icon, .detector-official .detector-icon { color: var(--success); }
+.detector-bridge .detector-icon, .detector-marauder .detector-icon, .detector-official .detector-icon { color: var(--success); }
 .detector-unknown .detector-icon, .detector-error .detector-icon { color: var(--error); }
 .detector-progress { height: 2px; position: absolute; inset: auto 0 -1px; overflow: hidden; background: transparent; }
 .detector-progress span { display: block; height: 100%; background: var(--orange); transition: width .16s ease; }
@@ -269,6 +269,11 @@ h1, h2, h3, p { margin-top: 0; }
 .mode-button strong { font-size: 16px; font-weight: 600; }
 .mode-button small { max-width: 390px; color: var(--muted); font-size: 12px; line-height: 1.35; }
 .mode-version { color: var(--quiet); font-size: 9px; font-weight: 600; }
+.firmware-caution { display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: start; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.firmware-caution > svg { width: 18px; margin-top: 2px; color: var(--orange); }
+.firmware-caution p { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.firmware-caution strong { font-size: 12px; font-weight: 600; }
+.firmware-caution span { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .firmware-meta { display: grid; grid-template-columns: repeat(4, 1fr); padding: 20px 0; border-bottom: 1px solid var(--line); }
 .firmware-meta span { display: flex; flex-direction: column; gap: 6px; color: #d5d3d7; font-size: 10px; font-weight: 600; }
 .firmware-meta b { color: var(--quiet); font-size: 7px; letter-spacing: .13em; }

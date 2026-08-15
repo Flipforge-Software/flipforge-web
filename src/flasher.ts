@@ -73,7 +73,17 @@ export function parseFirmwareIdentity(data: Uint8Array): FirmwareIdentity {
   return { id, projectName, version };
 }
 
-export async function detectFirmware(callbacks: FlashCallbacks): Promise<FirmwareDetectionResult> {
+export async function resolveFirmwareIdentity(data: Uint8Array, targets: FirmwareTarget[]): Promise<FirmwareIdentity> {
+  const parsed = parseFirmwareIdentity(data);
+  if (parsed.id) return parsed;
+  const fingerprint = await sha256(data);
+  const target = targets.find((candidate) => candidate.appIdentitySha256 === fingerprint);
+  return target
+    ? { id: target.id, projectName: parsed.projectName, version: target.version }
+    : parsed;
+}
+
+export async function detectFirmware(callbacks: FlashCallbacks, targets: FirmwareTarget[] = []): Promise<FirmwareDetectionResult> {
   if (!supportsWebSerial()) throw new Error("Use desktop Chrome or Edge over HTTPS to detect this board.");
 
   callbacks.onProgress(0.05, "Choose the ESP32-S2 serial port");
@@ -98,7 +108,7 @@ export async function detectFirmware(callbacks: FlashCallbacks): Promise<Firmwar
 
     callbacks.onProgress(0.7, "Reading the installed firmware identity");
     const identityBytes = await loader.readFlash(APP_PARTITION_ADDRESS, APP_IDENTITY_BYTES);
-    const identity = parseFirmwareIdentity(identityBytes);
+    const identity = await resolveFirmwareIdentity(identityBytes, targets);
     callbacks.onProgress(1, identity.id ? "Firmware identified" : "Firmware is not recognized");
     return { ...identity, chip };
   } finally {
@@ -173,12 +183,13 @@ export async function flashFirmware(target: FirmwareTarget, callbacks: FlashCall
 
     const segmentSizes = target.segments.map((segment) => segment.size);
     callbacks.onProgress(0.15, `Connected to ${chip}`);
+    if (target.eraseAll) callbacks.onLog("Performing the clean board erase required by the verified factory manifest.");
     await loader.writeFlash({
       fileArray: files,
       flashMode: target.flashMode as FlashModeValues,
       flashFreq: target.flashFrequency as FlashFreqValues,
       flashSize: target.flashSize as FlashSizeValues,
-      eraseAll: false,
+      eraseAll: target.eraseAll,
       compress: true,
       calculateMD5Hash: (image) =>
         SparkMD5.ArrayBuffer.hash(
