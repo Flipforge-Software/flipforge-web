@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  AppWindow,
   Check,
   ChevronRight,
   Clock3,
@@ -14,9 +15,13 @@ import {
   Plus,
   Save,
   ShieldCheck,
+  SlidersHorizontal,
+  Smartphone,
   Timer,
   Trash2,
   Type,
+  Undo2,
+  WandSparkles,
 } from "lucide-react";
 import {
   analyzeBadKBScript,
@@ -24,6 +29,7 @@ import {
   formatBadKBDuration,
   getBadKBTemplates,
   makeHotkeySnippet,
+  makeOpenAppSnippet,
   makeOpenURLSnippet,
   makeTextSnippet,
   sanitizeBadKBFileName,
@@ -33,7 +39,8 @@ import {
 } from "../badkb";
 import "../badkb.css";
 
-type BuilderTool = "text" | "delay" | "hotkey" | "url" | "key";
+type BuilderMode = "simple" | "advanced";
+type BuilderTool = "text" | "url" | "app" | "delay" | "hotkey" | "key";
 
 interface SavedProject {
   id: string;
@@ -46,7 +53,7 @@ interface SavedProject {
 }
 
 const PROJECTS_KEY = "flipforge.badkb.projects.v1";
-const INITIAL_SCRIPT = "REM Flipforge authorized typing test\nDEFAULT_DELAY 100\nDELAY 1200\nSTRINGLN Flipforge BadKB test complete.";
+const INITIAL_SCRIPT = "REM Flipforge guided BadKB sequence";
 const KEY_OPTIONS = ["ENTER", "TAB", "ESC", "SPACE", "UP", "DOWN", "LEFT", "RIGHT", "HOME", "END", "F5"];
 
 function loadProjects(): SavedProject[] {
@@ -72,7 +79,8 @@ function severityLabel(issue: BadKBIssue): string {
 export default function BadKBBuilder() {
   const [projectName, setProjectName] = useState("Untitled sequence");
   const [script, setScript] = useState(INITIAL_SCRIPT);
-  const [target, setTarget] = useState<BadKBTarget>("windows");
+  const [mode, setMode] = useState<BuilderMode>("simple");
+  const [target, setTarget] = useState<BadKBTarget>("ios");
   const [layout, setLayout] = useState<BadKBLayout>("us");
   const [defaultDelay, setDefaultDelay] = useState(100);
   const [tool, setTool] = useState<BuilderTool>("text");
@@ -80,7 +88,9 @@ export default function BadKBBuilder() {
   const [delayValue, setDelayValue] = useState("1000");
   const [hotkeyValue, setHotkeyValue] = useState("CTRL SHIFT P");
   const [urlValue, setURLValue] = useState("https://docs.flipper.net/bad-usb");
+  const [appValue, setAppValue] = useState("Notes");
   const [keyValue, setKeyValue] = useState("ENTER");
+  const [scriptHistory, setScriptHistory] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>(loadProjects);
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -101,7 +111,9 @@ export default function BadKBBuilder() {
 
   const appendSnippet = (snippet: string) => {
     const next = script.trimEnd() ? `${script.trimEnd()}\n${snippet}\n` : `${snippet}\n`;
+    setScriptHistory((history) => [...history.slice(-19), script]);
     setScript(next);
+    if (mode !== "advanced") return;
     window.requestAnimationFrame(() => {
       const editor = editorRef.current;
       if (!editor) return;
@@ -124,6 +136,8 @@ export default function BadKBBuilder() {
         appendSnippet(makeHotkeySnippet(hotkeyValue.split(/\s+/)));
       } else if (tool === "url") {
         appendSnippet(makeOpenURLSnippet(target, urlValue));
+      } else if (tool === "app") {
+        appendSnippet(makeOpenAppSnippet(target, appValue));
       } else {
         appendSnippet(keyValue);
       }
@@ -184,6 +198,7 @@ export default function BadKBBuilder() {
     setTarget(project.target);
     setLayout(project.layout);
     setDefaultDelay(project.defaultDelay);
+    setScriptHistory([]);
     setNotice(`Loaded ${project.name}.`);
   };
 
@@ -207,6 +222,7 @@ export default function BadKBBuilder() {
     try {
       const contents = await file.text();
       setScript(contents.replace(/\r\n?/g, "\n"));
+      setScriptHistory([]);
       setProjectName(file.name.replace(/\.txt$/i, "") || "Imported sequence");
       setNotice("Script imported locally. Nothing was uploaded.");
     } catch {
@@ -215,12 +231,22 @@ export default function BadKBBuilder() {
   };
 
   const goToLine = (line: number) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    const lines = editor.value.split("\n");
-    const position = lines.slice(0, Math.max(0, line - 1)).reduce((total, value) => total + value.length + 1, 0);
-    editor.focus();
-    editor.setSelectionRange(position, position + (lines[line - 1]?.length ?? 0));
+    const selectLine = () => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const lines = editor.value.split("\n");
+      const position = lines.slice(0, Math.max(0, line - 1)).reduce((total, value) => total + value.length + 1, 0);
+      editor.focus();
+      editor.setSelectionRange(position, position + (lines[line - 1]?.length ?? 0));
+    };
+
+    if (editorRef.current) {
+      selectLine();
+      return;
+    }
+
+    setMode("advanced");
+    window.requestAnimationFrame(() => window.requestAnimationFrame(selectLine));
   };
 
   const syncEditorScroll = () => {
@@ -230,13 +256,55 @@ export default function BadKBBuilder() {
   const resetProject = () => {
     setProjectName("Untitled sequence");
     setScript(INITIAL_SCRIPT);
+    setScriptHistory([]);
     setNotice("New local project started.");
   };
 
+  const undoLastAction = () => {
+    const previous = scriptHistory.at(-1);
+    if (previous === undefined) return;
+    setScript(previous);
+    setScriptHistory((history) => history.slice(0, -1));
+    setNotice("Last action removed.");
+  };
+
+  const changeTarget = (nextTarget: BadKBTarget) => {
+    setTarget(nextTarget);
+    if (nextTarget === "ios") {
+      setHotkeyValue("GUI SPACE");
+      setAppValue("Notes");
+    }
+  };
+
+  const loadTemplate = (name: string, templateScript: string) => {
+    setProjectName(name);
+    setScript(templateScript);
+    setScriptHistory([]);
+    setNotice(`${name} loaded.`);
+  };
+
   const toolButton = (value: BuilderTool, label: string, icon: React.ReactNode) => (
-    <button className={tool === value ? "active" : ""} onClick={() => setTool(value)} aria-pressed={tool === value}>
+    <button className={tool === value ? "active" : ""} onClick={() => setTool(value)} aria-label={label} aria-pressed={tool === value}>
       {icon}<span>{label}</span>
     </button>
+  );
+
+  const simpleAction = (value: BuilderTool, label: string, description: string, icon: React.ReactNode) => (
+    <button className={tool === value ? "active" : ""} onClick={() => setTool(value)} aria-pressed={tool === value}>
+      {icon}<span><strong>{label}</strong><small>{description}</small></span><ChevronRight />
+    </button>
+  );
+
+  const actionInput = (
+    <div className="badkb-tool-input">
+      {tool === "text" && <label><span>WHAT SHOULD IT TYPE?</span><textarea value={textValue} onChange={(event) => setTextValue(event.target.value)} placeholder="Text to type into the active field" rows={2} /></label>}
+      {tool === "url" && <label><span>WHICH WEBSITE SHOULD IT OPEN?</span><input type="url" value={urlValue} onChange={(event) => setURLValue(event.target.value)} placeholder="https://example.com" /></label>}
+      {tool === "app" && <label><span>WHICH APP SHOULD IT OPEN?</span><input value={appValue} onChange={(event) => setAppValue(event.target.value)} placeholder={target === "ios" ? "Notes" : "App name"} maxLength={80} /></label>}
+      {tool === "delay" && <label><span>HOW LONG SHOULD IT WAIT?</span><div className="badkb-number-field"><input type="number" min="0" max="600000" value={delayValue} onChange={(event) => setDelayValue(event.target.value)} /><small>MS</small></div></label>}
+      {tool === "hotkey" && <label><span>WHICH SHORTCUT SHOULD IT PRESS?</span><input value={hotkeyValue} onChange={(event) => setHotkeyValue(event.target.value)} placeholder={target === "ios" ? "GUI SPACE" : "CTRL SHIFT P"} /></label>}
+      {tool === "key" && <label><span>WHICH KEY SHOULD IT PRESS?</span><select value={keyValue} onChange={(event) => setKeyValue(event.target.value)}>{KEY_OPTIONS.map((key) => <option key={key}>{key}</option>)}</select></label>}
+      <button className="badkb-add-action" onClick={addAction}><Plus /> Add step</button>
+    </div>
   );
 
   return (
@@ -244,10 +312,16 @@ export default function BadKBBuilder() {
       <header className="badkb-intro">
         <div>
           <p className="eyebrow">BADKB WORKSPACE / LOCAL ONLY</p>
-          <h1>Build the sequence.<br />See every keystroke.</h1>
-          <p>Create authorized Flipper BadUSB automations with live timing, validation, and a structured action builder.</p>
+          <h1>{mode === "simple" ? <>Tell it what<br />to do.</> : <>Build the sequence.<br />See every keystroke.</>}</h1>
+          <p>{mode === "simple" ? "Choose an action, answer one question, and Flipforge writes the safe BadUSB commands for you." : "Write and inspect authorized Flipper BadUSB automations with raw DuckyScript, live timing, and line-specific validation."}</p>
         </div>
-        <div className="badkb-safety-mark"><ShieldCheck /><span><strong>SAFE BUILDER</strong>Known high-risk patterns blocked</span></div>
+        <div className="badkb-intro-aside">
+          <div className="badkb-mode-switch" aria-label="Builder mode">
+            <button className={mode === "simple" ? "active" : ""} onClick={() => setMode("simple")} aria-pressed={mode === "simple"}><WandSparkles /><span><strong>Simple</strong><small>Guided actions</small></span></button>
+            <button className={mode === "advanced" ? "active" : ""} onClick={() => setMode("advanced")} aria-pressed={mode === "advanced"}><SlidersHorizontal /><span><strong>Advanced</strong><small>Raw control</small></span></button>
+          </div>
+          <div className="badkb-safety-mark"><ShieldCheck /><span><strong>SAFE BUILDER</strong>Known high-risk patterns blocked</span></div>
+        </div>
       </header>
 
       <section className="badkb-status-strip" aria-label="Script summary">
@@ -271,43 +345,61 @@ export default function BadKBBuilder() {
             </div>
           </div>
 
-          <section className="badkb-composer" aria-labelledby="composer-title">
-            <div className="badkb-section-heading"><span>ACTION BUILDER</span><strong id="composer-title">Add a safe command</strong></div>
-            <div className="badkb-tool-tabs">
-              {toolButton("text", "Type", <Type />)}
-              {toolButton("delay", "Pause", <Timer />)}
-              {toolButton("hotkey", "Hotkey", <KeyRound />)}
-              {toolButton("url", "Website", <Link />)}
-              {toolButton("key", "Key", <Keyboard />)}
-            </div>
-            <div className="badkb-tool-input">
-              {tool === "text" && <textarea value={textValue} onChange={(event) => setTextValue(event.target.value)} placeholder="Text to type into the active field" rows={2} />}
-              {tool === "delay" && <label><span>MILLISECONDS</span><input type="number" min="0" max="600000" value={delayValue} onChange={(event) => setDelayValue(event.target.value)} /></label>}
-              {tool === "hotkey" && <label><span>KEY COMBINATION</span><input value={hotkeyValue} onChange={(event) => setHotkeyValue(event.target.value)} placeholder="CTRL SHIFT P" /></label>}
-              {tool === "url" && <label><span>HTTP OR HTTPS URL</span><input type="url" value={urlValue} onChange={(event) => setURLValue(event.target.value)} /></label>}
-              {tool === "key" && <label><span>KEY</span><select value={keyValue} onChange={(event) => setKeyValue(event.target.value)}>{KEY_OPTIONS.map((key) => <option key={key}>{key}</option>)}</select></label>}
-              <button className="badkb-add-action" onClick={addAction}><Plus /> Add to sequence</button>
-            </div>
-          </section>
+          {mode === "simple" ? (
+            <section className="badkb-simple-builder" aria-labelledby="simple-builder-title">
+              <div className="badkb-section-heading"><span>STEP 1</span><strong id="simple-builder-title">What do you want to do?</strong></div>
+              <div className="badkb-intent-list">
+                {simpleAction("text", "Type something", "Write text in the selected field", <Type />)}
+                {simpleAction("url", "Open a website", "Search and open a safe web address", <Link />)}
+                {simpleAction("app", "Open an app", target === "ios" ? "Find an installed iPhone or iPad app" : "Find an installed application", <AppWindow />)}
+                {simpleAction("delay", "Wait a moment", "Pause before the next action", <Timer />)}
+                {simpleAction("hotkey", "Use a shortcut", "Press a keyboard combination", <KeyRound />)}
+                {simpleAction("key", "Press one key", "Enter, Tab, arrows, or another key", <Keyboard />)}
+              </div>
+              <div className="badkb-simple-answer">
+                <div className="badkb-section-heading"><span>STEP 2</span><strong>Give Flipforge the detail</strong></div>
+                {actionInput}
+              </div>
+              <div className="badkb-simple-export">
+                <span><strong>{analysis.canExport ? "Sequence ready" : "Add your first useful step"}</strong><small>{analysis.canExport ? "Copy it or save the .txt file for the Flipper Bad USB app." : "The live sequence below will update as you build."}</small></span>
+                <div><button onClick={undoLastAction} disabled={!scriptHistory.length}><Undo2 /> Undo</button><button onClick={copyScript} disabled={!analysis.canExport}><Copy /> Copy</button><button className="primary" onClick={exportScript} disabled={!analysis.canExport}><Download /> Export .txt</button></div>
+              </div>
+            </section>
+          ) : (
+            <section className="badkb-composer" aria-labelledby="composer-title">
+              <div className="badkb-section-heading"><span>ACTION BUILDER</span><strong id="composer-title">Add a safe command</strong></div>
+              <div className="badkb-tool-tabs">
+                {toolButton("text", "Type", <Type />)}
+                {toolButton("url", "Website", <Link />)}
+                {toolButton("app", "App", <AppWindow />)}
+                {toolButton("delay", "Pause", <Timer />)}
+                {toolButton("hotkey", "Hotkey", <KeyRound />)}
+                {toolButton("key", "Key", <Keyboard />)}
+              </div>
+              {actionInput}
+            </section>
+          )}
 
-          <section className="badkb-code-section">
-            <div className="badkb-section-heading">
-              <span>DUCKYSCRIPT</span>
-              <strong>Raw sequence</strong>
-              <div><button onClick={copyScript} disabled={!analysis.canExport}><Copy /> Copy</button><button onClick={exportScript} disabled={!analysis.canExport}><Download /> Export .txt</button></div>
-            </div>
-            <div className="badkb-editor-shell">
-              <pre ref={lineNumbersRef} aria-hidden="true">{lineNumbers}</pre>
-              <textarea
-                ref={editorRef}
-                value={script}
-                onChange={(event) => setScript(event.target.value)}
-                onScroll={syncEditorScroll}
-                spellCheck={false}
-                aria-label="DuckyScript editor"
-              />
-            </div>
-          </section>
+          {mode === "advanced" && (
+            <section className="badkb-code-section">
+              <div className="badkb-section-heading">
+                <span>DUCKYSCRIPT</span>
+                <strong>Raw sequence</strong>
+                <div><button onClick={copyScript} disabled={!analysis.canExport}><Copy /> Copy</button><button onClick={exportScript} disabled={!analysis.canExport}><Download /> Export .txt</button></div>
+              </div>
+              <div className="badkb-editor-shell">
+                <pre ref={lineNumbersRef} aria-hidden="true">{lineNumbers}</pre>
+                <textarea
+                  ref={editorRef}
+                  value={script}
+                  onChange={(event) => { setScript(event.target.value); setScriptHistory([]); }}
+                  onScroll={syncEditorScroll}
+                  spellCheck={false}
+                  aria-label="DuckyScript editor"
+                />
+              </div>
+            </section>
+          )}
 
           <section className="badkb-timeline" aria-labelledby="timeline-title">
             <div className="badkb-section-heading"><span>RUNTIME PREVIEW</span><strong id="timeline-title">Sequence timeline</strong></div>
@@ -325,17 +417,23 @@ export default function BadKBBuilder() {
         <aside className="badkb-inspector" aria-label="BadKB project inspector">
           <section>
             <div className="badkb-section-heading"><span>PROFILE</span><strong>Target device</strong></div>
-            <label><span>OPERATING SYSTEM</span><select value={target} onChange={(event) => setTarget(event.target.value as BadKBTarget)}><option value="windows">Windows</option><option value="macos">macOS</option><option value="linux">Linux</option><option value="universal">Browser / Universal</option></select></label>
+            <label><span>OPERATING SYSTEM</span><select value={target} onChange={(event) => changeTarget(event.target.value as BadKBTarget)}><option value="ios">iPhone / iPad</option><option value="windows">Windows</option><option value="macos">macOS</option><option value="linux">Linux</option><option value="universal">Browser / Universal</option></select></label>
             <label><span>KEYBOARD LAYOUT</span><select value={layout} onChange={(event) => setLayout(event.target.value as BadKBLayout)}><option value="us">US English</option><option value="uk">UK English</option><option value="de">German</option><option value="fr">French</option><option value="es">Spanish</option></select></label>
             <label><span>FALLBACK DELAY</span><div className="badkb-number-field"><input type="number" min="0" max="10000" value={defaultDelay} onChange={(event) => setDefaultDelay(Math.max(0, Math.min(10_000, Number(event.target.value))))} /><small>MS</small></div></label>
             <p className="badkb-profile-note">Target and layout are written into the exported file as project metadata. Set the matching keyboard layout on your Flipper before running it.</p>
+            {target === "ios" && (
+              <div className="badkb-ios-setup">
+                <Smartphone />
+                <span><strong>iPhone / iPad ready</strong><small>Connect the Flipper with the correct USB-C cable or Lightning adapter. Command-Space actions use iOS Search. Turn on Full Keyboard Access only for broader keyboard navigation.</small></span>
+              </div>
+            )}
           </section>
 
           <section>
             <div className="badkb-section-heading"><span>STARTERS</span><strong>Safe templates</strong></div>
             <div className="badkb-templates">
               {templates.map((template) => (
-                <button key={template.id} onClick={() => { setProjectName(template.name); setScript(template.script); setNotice(`${template.name} loaded.`); }}>
+                <button key={template.id} onClick={() => loadTemplate(template.name, template.script)}>
                   <span><strong>{template.name}</strong><small>{template.description}</small></span><ChevronRight />
                 </button>
               ))}

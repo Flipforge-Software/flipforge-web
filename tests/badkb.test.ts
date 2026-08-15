@@ -4,6 +4,7 @@ import {
   buildBadKBExport,
   formatBadKBDuration,
   makeHotkeySnippet,
+  makeOpenAppSnippet,
   makeOpenURLSnippet,
   makeTextSnippet,
   sanitizeBadKBFileName,
@@ -50,8 +51,15 @@ describe("BadKB command builders", () => {
   it("builds OS-aware URL launchers and rejects unsafe URL forms", () => {
     expect(makeOpenURLSnippet("windows", "https://flipper.net")).toContain("GUI r");
     expect(makeOpenURLSnippet("macos", "https://flipper.net")).toContain("GUI SPACE");
+    expect(makeOpenURLSnippet("ios", "https://flipper.net")).toContain("GUI SPACE");
     expect(() => makeOpenURLSnippet("windows", "javascript:alert(1)")).toThrow("http or https");
     expect(() => makeOpenURLSnippet("windows", "https://user:pass@example.com")).toThrow("embedded credentials");
+  });
+
+  it("builds iPhone and iPad app-search sequences", () => {
+    expect(makeOpenAppSnippet("ios", "Notes")).toBe("GUI SPACE\nDELAY 500\nSTRING Notes\nDELAY 500\nENTER");
+    expect(() => makeOpenAppSnippet("universal", "Notes")).toThrow("specific operating system");
+    expect(() => makeOpenAppSnippet("ios", "   ")).toThrow("app name");
   });
 
   it("builds safe hotkeys", () => {
@@ -70,5 +78,10 @@ describe("BadKB command builders", () => {
     expect(output).toContain("REM FLIPFORGE_PROFILE target=macos layout=uk");
     expect(output).toContain("DEFAULT_DELAY 125");
     expect(buildBadKBExport("DEFAULT_DELAY 50\nSTRING hello", { target: "windows", layout: "us", defaultDelay: 125 }).match(/DEFAULT_?DELAY/g)).toHaveLength(1);
+  });
+
+  it("exports the iPhone and iPad target profile", () => {
+    expect(buildBadKBExport("STRING hello", { target: "ios", layout: "us", defaultDelay: 120 }))
+      .toContain("REM FLIPFORGE_PROFILE target=ios layout=us");
   });
 });

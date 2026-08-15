@@ -1,4 +1,4 @@
-export type BadKBTarget = "windows" | "macos" | "linux" | "universal";
+export type BadKBTarget = "ios" | "windows" | "macos" | "linux" | "universal";
 export type BadKBLayout = "us" | "uk" | "de" | "fr" | "es";
 export type BadKBIssueSeverity = "error" | "warning" | "info";
 
@@ -199,8 +199,17 @@ export function makeOpenURLSnippet(target: BadKBTarget, value: string): string {
     throw new Error("Use a normal http or https URL without embedded credentials.");
   }
 
-  const launcher = target === "windows" ? "GUI r" : target === "macos" ? "GUI SPACE" : target === "linux" ? "GUI" : "CTRL L";
+  const launcher = target === "windows" ? "GUI r" : target === "ios" || target === "macos" ? "GUI SPACE" : target === "linux" ? "GUI" : "CTRL L";
   return `${launcher}\nDELAY 500\nSTRING ${url.toString()}\nENTER`;
+}
+
+export function makeOpenAppSnippet(target: BadKBTarget, value: string): string {
+  const appName = value.replace(/[\r\n]/g, " ").trim();
+  if (!appName || appName.length > 80) throw new Error("Enter an app name up to 80 characters.");
+  if (target === "universal") throw new Error("Choose a specific operating system before opening an app.");
+
+  const launcher = target === "windows" || target === "linux" ? "GUI" : "GUI SPACE";
+  return `${launcher}\nDELAY 500\nSTRING ${appName}\nDELAY 500\nENTER`;
 }
 
 export function makeHotkeySnippet(keys: string[]): string {
@@ -210,6 +219,29 @@ export function makeHotkeySnippet(keys: string[]): string {
 }
 
 export function getBadKBTemplates(target: BadKBTarget): BadKBTemplate[] {
+  if (target === "ios") {
+    return [
+      {
+        id: "ios-hello",
+        name: "iPhone typing test",
+        description: "Types a harmless confirmation into the active text field.",
+        script: "REM iPhone and iPad typing test\nDEFAULT_DELAY 120\nDELAY 1200\nSTRINGLN Flipforge keyboard test complete.",
+      },
+      {
+        id: "ios-docs",
+        name: "Open Flipper docs",
+        description: "Uses iOS Search to open the official Flipper documentation.",
+        script: `REM Open official Flipper documentation on iOS\nDEFAULT_DELAY 120\nDELAY 1200\n${makeOpenURLSnippet(target, "https://docs.flipper.net/bad-usb")}`,
+      },
+      {
+        id: "ios-notes",
+        name: "Open Notes",
+        description: "Uses Command-Space Search to open the Notes app.",
+        script: `REM Open Notes on iPhone or iPad\nDEFAULT_DELAY 120\nDELAY 1200\n${makeOpenAppSnippet(target, "Notes")}`,
+      },
+    ];
+  }
+
   return [
     {
       id: "hello",
