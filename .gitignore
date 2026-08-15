@@ -1,0 +1,6 @@
+node_modules/
+dist/
+public/firmware/
+.DS_Store
+*.local
+npm-debug.log*
