@@ -12,6 +12,10 @@ import {
   Keyboard,
   Link,
   ListChecks,
+  GripVertical,
+  ArrowDown,
+  ArrowUp,
+  CopyPlus,
   Plus,
   Save,
   ShieldCheck,
@@ -20,7 +24,6 @@ import {
   Timer,
   Trash2,
   Type,
-  Undo2,
   WandSparkles,
 } from "lucide-react";
 import {
@@ -50,11 +53,60 @@ interface SavedProject {
   layout: BadKBLayout;
   defaultDelay: number;
   savedAt: string;
+  mode?: BuilderMode;
+  blocks?: SimpleBlock[];
+}
+
+interface SimpleBlock {
+  id: string;
+  type: BuilderTool;
+  value: string;
+}
+
+interface CompiledSimpleBlock {
+  snippet: string;
+  error: string | null;
 }
 
 const PROJECTS_KEY = "flipforge.badkb.projects.v1";
 const INITIAL_SCRIPT = "REM Flipforge guided BadKB sequence";
 const KEY_OPTIONS = ["ENTER", "TAB", "ESC", "SPACE", "UP", "DOWN", "LEFT", "RIGHT", "HOME", "END", "F5"];
+const BLOCK_DEFAULTS: Record<BuilderTool, string> = {
+  text: "Hello from Flipforge",
+  url: "https://docs.flipper.net/bad-usb",
+  app: "Notes",
+  delay: "1000",
+  hotkey: "GUI SPACE",
+  key: "ENTER",
+};
+
+function isSimpleBlock(value: unknown): value is SimpleBlock {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<SimpleBlock>;
+  return typeof entry.id === "string" &&
+    ["text", "url", "app", "delay", "hotkey", "key"].includes(entry.type ?? "") &&
+    typeof entry.value === "string";
+}
+
+function compileSimpleBlock(block: SimpleBlock, target: BadKBTarget): CompiledSimpleBlock {
+  try {
+    if (block.type === "text") {
+      if (!block.value.trim()) throw new Error("Enter the text this block should type.");
+      return { snippet: makeTextSnippet(block.value), error: null };
+    }
+    if (block.type === "url") return { snippet: makeOpenURLSnippet(target, block.value), error: null };
+    if (block.type === "app") return { snippet: makeOpenAppSnippet(target, block.value), error: null };
+    if (block.type === "delay") {
+      const duration = Number(block.value);
+      if (!Number.isInteger(duration) || duration < 0 || duration > 600_000) throw new Error("Use a wait from 0 to 600,000 ms.");
+      return { snippet: `DELAY ${duration}`, error: null };
+    }
+    if (block.type === "hotkey") return { snippet: makeHotkeySnippet(block.value.split(/\s+/)), error: null };
+    return { snippet: block.value, error: null };
+  } catch (reason) {
+    return { snippet: "", error: reason instanceof Error ? reason.message : "This block needs attention." };
+  }
+}
 
 function loadProjects(): SavedProject[] {
   try {
@@ -76,6 +128,33 @@ function severityLabel(issue: BadKBIssue): string {
   return issue.severity === "error" ? "BLOCKED" : issue.severity === "warning" ? "CHECK" : "NOTE";
 }
 
+function blockLabel(type: BuilderTool): string {
+  if (type === "text") return "Type text";
+  if (type === "url") return "Open website";
+  if (type === "app") return "Open app";
+  if (type === "delay") return "Wait";
+  if (type === "hotkey") return "Keyboard shortcut";
+  return "Press key";
+}
+
+function blockDescription(type: BuilderTool): string {
+  if (type === "text") return "Types into the active field";
+  if (type === "url") return "Opens a safe web address";
+  if (type === "app") return "Finds an installed app";
+  if (type === "delay") return "Pauses the sequence";
+  if (type === "hotkey") return "Presses multiple keys together";
+  return "Presses one supported key";
+}
+
+function blockIcon(type: BuilderTool): React.ReactNode {
+  if (type === "text") return <Type />;
+  if (type === "url") return <Link />;
+  if (type === "app") return <AppWindow />;
+  if (type === "delay") return <Timer />;
+  if (type === "hotkey") return <KeyRound />;
+  return <Keyboard />;
+}
+
 export default function BadKBBuilder() {
   const [projectName, setProjectName] = useState("Untitled sequence");
   const [script, setScript] = useState(INITIAL_SCRIPT);
@@ -90,7 +169,9 @@ export default function BadKBBuilder() {
   const [urlValue, setURLValue] = useState("https://docs.flipper.net/bad-usb");
   const [appValue, setAppValue] = useState("Notes");
   const [keyValue, setKeyValue] = useState("ENTER");
-  const [scriptHistory, setScriptHistory] = useState<string[]>([]);
+  const [simpleBlocks, setSimpleBlocks] = useState<SimpleBlock[]>([]);
+  const [simpleSequenceActive, setSimpleSequenceActive] = useState(false);
+  const [draggedBlockID, setDraggedBlockID] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>(loadProjects);
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -102,6 +183,14 @@ export default function BadKBBuilder() {
   const lineNumbers = useMemo(() => script.split("\n").map((_, index) => index + 1).join("\n"), [script]);
   const errorCount = analysis.issues.filter((entry) => entry.severity === "error").length;
   const warningCount = analysis.issues.filter((entry) => entry.severity === "warning").length;
+  const compiledSimpleBlocks = useMemo(
+    () => simpleBlocks.map((block) => compileSimpleBlock(block, target)),
+    [simpleBlocks, target],
+  );
+  const simpleErrorCount = compiledSimpleBlocks.filter((entry) => entry.error).length;
+  const hasUnsyncedAdvancedScript = !simpleSequenceActive && simpleBlocks.length === 0 && analysis.commandCount > 0;
+  const canExportProject = analysis.canExport && (mode === "advanced" || (simpleSequenceActive && simpleBlocks.length > 0 && simpleErrorCount === 0));
+  const projectErrorCount = errorCount + (mode === "simple" ? simpleErrorCount : 0);
 
   useEffect(() => {
     if (!notice) return;
@@ -109,9 +198,16 @@ export default function BadKBBuilder() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  useEffect(() => {
+    if (!simpleSequenceActive) return;
+    const snippets = compiledSimpleBlocks.map((entry, index) => entry.error ? `REM Block ${index + 1} needs attention` : entry.snippet);
+    setScript([INITIAL_SCRIPT, ...snippets].join("\n"));
+  }, [compiledSimpleBlocks, simpleSequenceActive]);
+
   const appendSnippet = (snippet: string) => {
     const next = script.trimEnd() ? `${script.trimEnd()}\n${snippet}\n` : `${snippet}\n`;
-    setScriptHistory((history) => [...history.slice(-19), script]);
+    setSimpleBlocks([]);
+    setSimpleSequenceActive(false);
     setScript(next);
     if (mode !== "advanced") return;
     window.requestAnimationFrame(() => {
@@ -148,7 +244,7 @@ export default function BadKBBuilder() {
   };
 
   const copyScript = async () => {
-    if (!analysis.canExport) return;
+    if (!canExportProject) return;
     try {
       await navigator.clipboard.writeText(buildBadKBExport(script, { target, layout, defaultDelay }));
       setNotice("Script copied.");
@@ -158,7 +254,7 @@ export default function BadKBBuilder() {
   };
 
   const exportScript = () => {
-    if (!analysis.canExport) return;
+    if (!canExportProject) return;
     const blob = new Blob([buildBadKBExport(script, { target, layout, defaultDelay })], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -180,6 +276,8 @@ export default function BadKBBuilder() {
       layout,
       defaultDelay,
       savedAt: now,
+      mode,
+      blocks: simpleSequenceActive ? simpleBlocks : undefined,
     };
     const next = [project, ...savedProjects.filter((entry) => entry.id !== project.id)].slice(0, 12);
     try {
@@ -198,7 +296,10 @@ export default function BadKBBuilder() {
     setTarget(project.target);
     setLayout(project.layout);
     setDefaultDelay(project.defaultDelay);
-    setScriptHistory([]);
+    const restoredBlocks = project.blocks?.filter(isSimpleBlock) ?? [];
+    setSimpleBlocks(restoredBlocks);
+    setSimpleSequenceActive(restoredBlocks.length > 0);
+    setMode(restoredBlocks.length ? "simple" : project.mode ?? "advanced");
     setNotice(`Loaded ${project.name}.`);
   };
 
@@ -222,7 +323,9 @@ export default function BadKBBuilder() {
     try {
       const contents = await file.text();
       setScript(contents.replace(/\r\n?/g, "\n"));
-      setScriptHistory([]);
+      setSimpleBlocks([]);
+      setSimpleSequenceActive(false);
+      setMode("advanced");
       setProjectName(file.name.replace(/\.txt$/i, "") || "Imported sequence");
       setNotice("Script imported locally. Nothing was uploaded.");
     } catch {
@@ -256,16 +359,9 @@ export default function BadKBBuilder() {
   const resetProject = () => {
     setProjectName("Untitled sequence");
     setScript(INITIAL_SCRIPT);
-    setScriptHistory([]);
+    setSimpleBlocks([]);
+    setSimpleSequenceActive(false);
     setNotice("New local project started.");
-  };
-
-  const undoLastAction = () => {
-    const previous = scriptHistory.at(-1);
-    if (previous === undefined) return;
-    setScript(previous);
-    setScriptHistory((history) => history.slice(0, -1));
-    setNotice("Last action removed.");
   };
 
   const changeTarget = (nextTarget: BadKBTarget) => {
@@ -279,19 +375,78 @@ export default function BadKBBuilder() {
   const loadTemplate = (name: string, templateScript: string) => {
     setProjectName(name);
     setScript(templateScript);
-    setScriptHistory([]);
-    setNotice(`${name} loaded.`);
+    setSimpleBlocks([]);
+    setSimpleSequenceActive(false);
+    setMode("advanced");
+    setNotice(`${name} loaded in Advanced mode.`);
+  };
+
+  const addSimpleBlock = (type: BuilderTool) => {
+    if (hasUnsyncedAdvancedScript) {
+      setNotice("Start a new visual sequence or return to Advanced mode first.");
+      return;
+    }
+    const block: SimpleBlock = { id: crypto.randomUUID(), type, value: BLOCK_DEFAULTS[type] };
+    setSimpleBlocks((blocks) => [...blocks, block]);
+    setSimpleSequenceActive(true);
+    setNotice(`${type === "url" ? "Website" : type === "delay" ? "Wait" : type[0].toUpperCase() + type.slice(1)} block added.`);
+  };
+
+  const startVisualSequence = () => {
+    setScript(INITIAL_SCRIPT);
+    setSimpleBlocks([]);
+    setSimpleSequenceActive(false);
+    setNotice("New visual sequence started.");
+  };
+
+  const updateSimpleBlock = (id: string, value: string) => {
+    setSimpleBlocks((blocks) => blocks.map((block) => block.id === id ? { ...block, value } : block));
+  };
+
+  const removeSimpleBlock = (id: string) => {
+    setSimpleBlocks((blocks) => blocks.filter((block) => block.id !== id));
+    setNotice("Block removed.");
+  };
+
+  const duplicateSimpleBlock = (id: string) => {
+    setSimpleBlocks((blocks) => {
+      const index = blocks.findIndex((block) => block.id === id);
+      if (index < 0) return blocks;
+      const next = [...blocks];
+      next.splice(index + 1, 0, { ...blocks[index], id: crypto.randomUUID() });
+      return next;
+    });
+    setNotice("Block duplicated.");
+  };
+
+  const moveSimpleBlock = (id: string, direction: -1 | 1) => {
+    setSimpleBlocks((blocks) => {
+      const index = blocks.findIndex((block) => block.id === id);
+      const destination = index + direction;
+      if (index < 0 || destination < 0 || destination >= blocks.length) return blocks;
+      const next = [...blocks];
+      [next[index], next[destination]] = [next[destination], next[index]];
+      return next;
+    });
+  };
+
+  const dropSimpleBlock = (targetID: string) => {
+    if (!draggedBlockID || draggedBlockID === targetID) return;
+    setSimpleBlocks((blocks) => {
+      const sourceIndex = blocks.findIndex((block) => block.id === draggedBlockID);
+      const targetIndex = blocks.findIndex((block) => block.id === targetID);
+      if (sourceIndex < 0 || targetIndex < 0) return blocks;
+      const next = [...blocks];
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+    setDraggedBlockID(null);
   };
 
   const toolButton = (value: BuilderTool, label: string, icon: React.ReactNode) => (
     <button className={tool === value ? "active" : ""} onClick={() => setTool(value)} aria-label={label} aria-pressed={tool === value}>
       {icon}<span>{label}</span>
-    </button>
-  );
-
-  const simpleAction = (value: BuilderTool, label: string, description: string, icon: React.ReactNode) => (
-    <button className={tool === value ? "active" : ""} onClick={() => setTool(value)} aria-pressed={tool === value}>
-      {icon}<span><strong>{label}</strong><small>{description}</small></span><ChevronRight />
     </button>
   );
 
@@ -313,7 +468,7 @@ export default function BadKBBuilder() {
         <div>
           <p className="eyebrow">BADKB WORKSPACE / LOCAL ONLY</p>
           <h1>{mode === "simple" ? <>Tell it what<br />to do.</> : <>Build the sequence.<br />See every keystroke.</>}</h1>
-          <p>{mode === "simple" ? "Choose an action, answer one question, and Flipforge writes the safe BadUSB commands for you." : "Write and inspect authorized Flipper BadUSB automations with raw DuckyScript, live timing, and line-specific validation."}</p>
+          <p>{mode === "simple" ? "Stack readable actions, edit them in place, and Flipforge writes the safe BadUSB commands for you." : "Write and inspect authorized Flipper BadUSB automations with raw DuckyScript, live timing, and line-specific validation."}</p>
         </div>
         <div className="badkb-intro-aside">
           <div className="badkb-mode-switch" aria-label="Builder mode">
@@ -328,8 +483,8 @@ export default function BadKBBuilder() {
         <span><b>{analysis.commandCount}</b>COMMANDS</span>
         <span><b>{analysis.keystrokeCount}</b>KEYSTROKES</span>
         <span><b>{formatBadKBDuration(analysis.estimatedDurationMs)}</b>ESTIMATED</span>
-        <span className={errorCount ? "blocked" : warningCount ? "warning" : "clear"}>
-          <b>{errorCount || warningCount || "CLEAR"}</b>{errorCount ? "BLOCKED" : warningCount ? "CHECKS" : "VALIDATION"}
+        <span className={projectErrorCount ? "blocked" : warningCount ? "warning" : "clear"}>
+          <b>{projectErrorCount || warningCount || "CLEAR"}</b>{projectErrorCount ? "BLOCKED" : warningCount ? "CHECKS" : "VALIDATION"}
         </span>
       </section>
 
@@ -347,22 +502,81 @@ export default function BadKBBuilder() {
 
           {mode === "simple" ? (
             <section className="badkb-simple-builder" aria-labelledby="simple-builder-title">
-              <div className="badkb-section-heading"><span>STEP 1</span><strong id="simple-builder-title">What do you want to do?</strong></div>
-              <div className="badkb-intent-list">
-                {simpleAction("text", "Type something", "Write text in the selected field", <Type />)}
-                {simpleAction("url", "Open a website", "Search and open a safe web address", <Link />)}
-                {simpleAction("app", "Open an app", target === "ios" ? "Find an installed iPhone or iPad app" : "Find an installed application", <AppWindow />)}
-                {simpleAction("delay", "Wait a moment", "Pause before the next action", <Timer />)}
-                {simpleAction("hotkey", "Use a shortcut", "Press a keyboard combination", <KeyRound />)}
-                {simpleAction("key", "Press one key", "Enter, Tab, arrows, or another key", <Keyboard />)}
-              </div>
-              <div className="badkb-simple-answer">
-                <div className="badkb-section-heading"><span>STEP 2</span><strong>Give Flipforge the detail</strong></div>
-                {actionInput}
+              <div className="badkb-section-heading"><span>VISUAL BUILDER</span><strong id="simple-builder-title">Build with blocks</strong></div>
+              <div className="badkb-block-workspace">
+                <aside className="badkb-block-library" aria-label="Action library">
+                  <div><span>ACTION LIBRARY</span><strong>What should happen?</strong><small>Tap a block to add it to the bottom of your sequence.</small></div>
+                  <nav id="badkb-block-library">
+                    {(["text", "url", "app", "delay", "hotkey", "key"] as BuilderTool[]).map((type) => (
+                      <button key={type} onClick={() => addSimpleBlock(type)} disabled={hasUnsyncedAdvancedScript}>
+                        <span>{blockIcon(type)}</span><span><strong>{blockLabel(type)}</strong><small>{blockDescription(type)}</small></span><Plus />
+                      </button>
+                    ))}
+                  </nav>
+                </aside>
+
+                <div className="badkb-block-canvas">
+                  <header><span>YOUR SEQUENCE</span><strong>{simpleBlocks.length ? `${simpleBlocks.length} ${simpleBlocks.length === 1 ? "step" : "steps"}` : "No steps yet"}</strong><small>{simpleBlocks.length ? "Drag blocks or use the arrows to change the order." : "Choose an action from the library to begin."}</small></header>
+                  {simpleBlocks.length ? (
+                    <ol className="badkb-block-stack">
+                      {simpleBlocks.map((block, index) => {
+                        const compiled = compiledSimpleBlocks[index];
+                        return (
+                          <li
+                            key={block.id}
+                            className={draggedBlockID === block.id ? "dragging" : ""}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={() => dropSimpleBlock(block.id)}
+                          >
+                            <article className={compiled?.error ? "has-error" : ""}>
+                              <header>
+                                <span className="badkb-block-icon">{blockIcon(block.type)}</span>
+                                <span><small>STEP {String(index + 1).padStart(2, "0")}</small><strong>{blockLabel(block.type)}</strong></span>
+                                <button
+                                  className="badkb-drag-handle"
+                                  draggable
+                                  onDragStart={() => setDraggedBlockID(block.id)}
+                                  onDragEnd={() => setDraggedBlockID(null)}
+                                  aria-label={`Drag ${blockLabel(block.type)} block`}
+                                  title="Drag to reorder"
+                                ><GripVertical /></button>
+                              </header>
+                              <div className="badkb-block-body">
+                                {block.type === "text" && <textarea value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} rows={2} aria-label={`Text for step ${index + 1}`} />}
+                                {block.type === "url" && <input type="url" value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} aria-label={`Website for step ${index + 1}`} />}
+                                {block.type === "app" && <input value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} maxLength={80} aria-label={`App for step ${index + 1}`} />}
+                                {block.type === "delay" && <label><input type="number" min="0" max="600000" value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} aria-label={`Wait time for step ${index + 1}`} /><small>MS</small></label>}
+                                {block.type === "hotkey" && <input value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} aria-label={`Shortcut for step ${index + 1}`} />}
+                                {block.type === "key" && <select value={block.value} onChange={(event) => updateSimpleBlock(block.id, event.target.value)} aria-label={`Key for step ${index + 1}`}>{KEY_OPTIONS.map((key) => <option key={key}>{key}</option>)}</select>}
+                                {compiled?.error && <p><AlertTriangle /> {compiled.error}</p>}
+                              </div>
+                              <footer>
+                                <span>{compiled?.error ? "NEEDS ATTENTION" : "READY"}</span>
+                                <div>
+                                  <button onClick={() => moveSimpleBlock(block.id, -1)} disabled={index === 0} aria-label={`Move step ${index + 1} up`}><ArrowUp /></button>
+                                  <button onClick={() => moveSimpleBlock(block.id, 1)} disabled={index === simpleBlocks.length - 1} aria-label={`Move step ${index + 1} down`}><ArrowDown /></button>
+                                  <button onClick={() => duplicateSimpleBlock(block.id)} aria-label={`Duplicate step ${index + 1}`}><CopyPlus /></button>
+                                  <button onClick={() => removeSimpleBlock(block.id)} aria-label={`Delete step ${index + 1}`}><Trash2 /></button>
+                                </div>
+                              </footer>
+                            </article>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  ) : (
+                    <div className="badkb-block-empty">
+                      {hasUnsyncedAdvancedScript ? <SlidersHorizontal /> : <WandSparkles />}
+                      <strong>{hasUnsyncedAdvancedScript ? "This is an Advanced script" : "Your sequence starts here"}</strong>
+                      <p>{hasUnsyncedAdvancedScript ? "Custom DuckyScript cannot always be converted into safe visual blocks. Keep editing it in Advanced, or start a new visual sequence." : "Choose “Type text,” “Open website,” or another action. Flipforge connects the blocks and writes the script."}</p>
+                      {hasUnsyncedAdvancedScript && <div><button onClick={() => setMode("advanced")}>Return to Advanced</button><button className="primary" onClick={startVisualSequence}>Start visual sequence</button></div>}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="badkb-simple-export">
-                <span><strong>{analysis.canExport ? "Sequence ready" : "Add your first useful step"}</strong><small>{analysis.canExport ? "Copy it or save the .txt file for the Flipper Bad USB app." : "The live sequence below will update as you build."}</small></span>
-                <div><button onClick={undoLastAction} disabled={!scriptHistory.length}><Undo2 /> Undo</button><button onClick={copyScript} disabled={!analysis.canExport}><Copy /> Copy</button><button className="primary" onClick={exportScript} disabled={!analysis.canExport}><Download /> Export .txt</button></div>
+                <span><strong>{canExportProject ? "Sequence ready" : simpleErrorCount ? `${simpleErrorCount} ${simpleErrorCount === 1 ? "block needs" : "blocks need"} attention` : "Add your first block"}</strong><small>{canExportProject ? "Copy it or save the .txt file for the Flipper Bad USB app." : "Every block must be valid before export."}</small></span>
+                <div><button onClick={copyScript} disabled={!canExportProject}><Copy /> Copy</button><button className="primary" onClick={exportScript} disabled={!canExportProject}><Download /> Export .txt</button></div>
               </div>
             </section>
           ) : (
@@ -385,14 +599,14 @@ export default function BadKBBuilder() {
               <div className="badkb-section-heading">
                 <span>DUCKYSCRIPT</span>
                 <strong>Raw sequence</strong>
-                <div><button onClick={copyScript} disabled={!analysis.canExport}><Copy /> Copy</button><button onClick={exportScript} disabled={!analysis.canExport}><Download /> Export .txt</button></div>
+                <div><button onClick={copyScript} disabled={!canExportProject}><Copy /> Copy</button><button onClick={exportScript} disabled={!canExportProject}><Download /> Export .txt</button></div>
               </div>
               <div className="badkb-editor-shell">
                 <pre ref={lineNumbersRef} aria-hidden="true">{lineNumbers}</pre>
                 <textarea
                   ref={editorRef}
                   value={script}
-                  onChange={(event) => { setScript(event.target.value); setScriptHistory([]); }}
+                  onChange={(event) => { setScript(event.target.value); setSimpleBlocks([]); setSimpleSequenceActive(false); }}
                   onScroll={syncEditorScroll}
                   spellCheck={false}
                   aria-label="DuckyScript editor"
@@ -441,8 +655,10 @@ export default function BadKBBuilder() {
           </section>
 
           <section className="badkb-validation">
-            <div className="badkb-section-heading"><span>VALIDATION</span><strong>{errorCount ? `${errorCount} blocked` : warningCount ? `${warningCount} to check` : "Ready to export"}</strong></div>
-            {analysis.issues.length ? (
+            <div className="badkb-section-heading"><span>VALIDATION</span><strong>{projectErrorCount ? `${projectErrorCount} blocked` : warningCount ? `${warningCount} to check` : "Ready to export"}</strong></div>
+            {mode === "simple" && simpleErrorCount ? (
+              <p className="badkb-block-validation"><AlertTriangle /> Fix the highlighted {simpleErrorCount === 1 ? "block" : "blocks"} before exporting.</p>
+            ) : analysis.issues.length ? (
               <div className="badkb-issues">
                 {analysis.issues.slice(0, 8).map((entry, index) => (
                   <button key={`${entry.line}-${entry.message}-${index}`} className={`issue-${entry.severity}`} onClick={() => goToLine(entry.line)}>
