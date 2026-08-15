@@ -7,13 +7,14 @@ import {
   ExternalLink,
   RefreshCw,
   RotateCcw,
+  ScanSearch,
   ShieldCheck,
   Terminal,
   Usb,
   Wifi,
   Zap,
 } from "lucide-react";
-import { flashErrorMessage, flashFirmware, supportsWebSerial } from "./flasher";
+import { detectFirmware, flashErrorMessage, flashFirmware, supportsWebSerial } from "./flasher";
 import {
   formatBytes,
   loadFirmwareCatalog,
@@ -22,8 +23,13 @@ import {
   type FirmwareTarget,
 } from "./firmware";
 
-type Phase = "prepare" | "flashing" | "complete" | "error";
+type Phase = "prepare" | "detecting" | "flashing" | "complete" | "error";
 type SiteTab = "home" | "flash";
+type DetectionState = {
+  status: "idle" | "detecting" | "bridge" | "official" | "unknown" | "error";
+  detail: string;
+  version?: string;
+};
 
 const bootSteps = [
   "Remove the Wi-Fi Devboard from your Flipper.",
@@ -47,7 +53,12 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [detection, setDetection] = useState<DetectionState>({
+    status: "idle",
+    detail: "Check the installed firmware without writing to the board.",
+  });
   const compatible = typeof window !== "undefined" && supportsWebSerial();
+  const busy = phase === "detecting" || phase === "flashing";
 
   useEffect(() => {
     const updateTab = () => setTab(tabFromPath());
@@ -84,7 +95,7 @@ export default function App() {
   };
 
   const chooseMode = (id: FirmwareId) => {
-    if (phase === "flashing") return;
+    if (busy) return;
     const next = catalog?.targets.find((target) => target.id === id);
     setSelectedId(id);
     setPhase("prepare");
@@ -104,8 +115,49 @@ export default function App() {
     setLogs((current) => [...current.slice(-119), clean]);
   };
 
+  const startDetection = async () => {
+    if (!compatible || busy) return;
+    setPhase("detecting");
+    setProgress(0);
+    setError(null);
+    setDetection({ status: "detecting", detail: "Waiting for the ESP32-S2 bootloader." });
+    setLogs(["Firmware detection started.", "Reading the ESP app identity only; flash will not be modified."]);
+
+    try {
+      const result = await detectFirmware({
+        onProgress: (value, detail) => {
+          setProgress(value);
+          setProgressDetail(detail);
+          setDetection((current) => ({ ...current, detail }));
+        },
+        onLog: appendLog,
+        onDeviceLost: () => appendLog("Serial device restarted."),
+      });
+
+      if (result.id === "bridge") {
+        setDetection({ status: "bridge", detail: "Flipforge Bridge is installed.", version: result.version });
+        appendLog(`Detected Flipforge Bridge ${result.version || "(version unavailable)"}.`);
+      } else if (result.id === "official") {
+        setDetection({ status: "official", detail: "Official Blackmagic firmware is installed.", version: result.version });
+        appendLog(`Detected stock Blackmagic firmware ${result.version || "(version unavailable)"}.`);
+      } else {
+        const project = result.projectName || "No valid ESP app identity";
+        setDetection({ status: "unknown", detail: `${project} is not recognized as Forge or stock.`, version: result.version });
+        appendLog(`Unknown firmware identity: ${project}.`);
+      }
+      setProgress(1);
+    } catch (reason) {
+      const message = flashErrorMessage(reason);
+      setDetection({ status: "error", detail: message });
+      setProgressDetail("Firmware detection stopped");
+      appendLog(`ERROR  ${message}`);
+    } finally {
+      setPhase("prepare");
+    }
+  };
+
   const startFlash = async () => {
-    if (!selected || !confirmed || !compatible) return;
+    if (!selected || !confirmed || !compatible || busy) return;
     setPhase("flashing");
     setProgress(0);
     setError(null);
@@ -122,6 +174,11 @@ export default function App() {
       });
       setProgress(1);
       setProgressDetail("Flash verified");
+      setDetection({
+        status: selected.id,
+        detail: selected.id === "bridge" ? "Flipforge Bridge is installed." : "Official Blackmagic firmware is installed.",
+        version: selected.version,
+      });
       appendLog(`${selected.shortName} ${selected.version} verified on ${result.chip}.`);
       appendLog("Press RESET on the board to start the new firmware.");
       setPhase("complete");
@@ -149,14 +206,24 @@ export default function App() {
   };
 
   const stateLabel =
-    phase === "flashing"
-      ? "Writing firmware"
+    phase === "detecting"
+      ? "Detecting firmware"
+      : phase === "flashing"
+        ? "Writing firmware"
       : phase === "complete"
         ? "Complete"
         : phase === "error"
           ? "Stopped"
           : catalogError
             ? "Catalog error"
+            : detection.status === "bridge"
+              ? "Forge detected"
+              : detection.status === "official"
+                ? "Stock detected"
+                : detection.status === "unknown"
+                  ? "Unknown firmware"
+                  : detection.status === "error"
+                    ? "Detection stopped"
             : "Ready";
 
   return (
@@ -177,33 +244,7 @@ export default function App() {
             <section className="setup-pane" aria-labelledby="setup-title">
               <div className="pane-heading">
                 <span>SETUP</span>
-                <h2 id="setup-title">Choose firmware</h2>
-              </div>
-
-              <div className="mode-switch" aria-label="Firmware mode">
-                <ModeButton
-                  target={catalog?.targets.find((target) => target.id === "bridge")}
-                  selected={selectedId === "bridge"}
-                  icon={<Wifi />}
-                  fallbackName="Flipforge Bridge"
-                  onClick={() => chooseMode("bridge")}
-                  disabled={phase === "flashing"}
-                />
-                <ModeButton
-                  target={catalog?.targets.find((target) => target.id === "official")}
-                  selected={selectedId === "official"}
-                  icon={<RotateCcw />}
-                  fallbackName="Original Firmware"
-                  onClick={() => chooseMode("official")}
-                  disabled={phase === "flashing"}
-                />
-              </div>
-
-              <div className="firmware-meta">
-                <span><b>VERSION</b>{selected ? selected.version : "—"}</span>
-                <span><b>DOWNLOAD</b>{selected ? formatBytes(totalSize) : "—"}</span>
-                <span><b>CHIP</b>ESP32-S2</span>
-                <span><b>SOURCE</b>{selected?.sourceName ?? "—"}</span>
+                <h2 id="setup-title">Identify or flash</h2>
               </div>
 
               <div className="step-block">
@@ -216,6 +257,42 @@ export default function App() {
                     </li>
                   ))}
                 </ol>
+              </div>
+
+              <FirmwareDetector
+                detection={detection}
+                progress={progress}
+                compatible={compatible}
+                disabled={busy}
+                onDetect={startDetection}
+              />
+
+              <div className="block-label firmware-label"><Zap /> CHOOSE FIRMWARE TO INSTALL</div>
+
+              <div className="mode-switch" aria-label="Firmware mode">
+                <ModeButton
+                  target={catalog?.targets.find((target) => target.id === "bridge")}
+                  selected={selectedId === "bridge"}
+                  icon={<Wifi />}
+                  fallbackName="Flipforge Bridge"
+                  onClick={() => chooseMode("bridge")}
+                  disabled={busy}
+                />
+                <ModeButton
+                  target={catalog?.targets.find((target) => target.id === "official")}
+                  selected={selectedId === "official"}
+                  icon={<RotateCcw />}
+                  fallbackName="Original Firmware"
+                  onClick={() => chooseMode("official")}
+                  disabled={busy}
+                />
+              </div>
+
+              <div className="firmware-meta">
+                <span><b>VERSION</b>{selected ? selected.version : "—"}</span>
+                <span><b>DOWNLOAD</b>{selected ? formatBytes(totalSize) : "—"}</span>
+                <span><b>CHIP</b>ESP32-S2</span>
+                <span><b>SOURCE</b>{selected?.sourceName ?? "—"}</span>
               </div>
 
               {phase === "complete" && (
@@ -247,12 +324,12 @@ export default function App() {
                       type="checkbox"
                       checked={confirmed}
                       onChange={(event) => setConfirmed(event.target.checked)}
-                      disabled={phase === "flashing"}
+                      disabled={busy}
                     />
                     <span className="check-box"><Check /></span>
                     <span>I completed all three steps</span>
                   </label>
-                  <button className="primary-action" onClick={startFlash} disabled={!selected || !confirmed || phase === "flashing" || Boolean(catalogError)}>
+                  <button className="primary-action" onClick={startFlash} disabled={!selected || !confirmed || busy || Boolean(catalogError)}>
                     {phase === "flashing" ? "Flashing…" : `Connect & flash ${selected?.shortName ?? "firmware"}`}
                     <ArrowRight />
                   </button>
@@ -397,6 +474,50 @@ function ModeButton({
   );
 }
 
+function FirmwareDetector({
+  detection,
+  progress,
+  compatible,
+  disabled,
+  onDetect,
+}: {
+  detection: DetectionState;
+  progress: number;
+  compatible: boolean;
+  disabled: boolean;
+  onDetect: () => void;
+}) {
+  const label =
+    detection.status === "bridge"
+      ? "Forge firmware"
+      : detection.status === "official"
+        ? "Stock firmware"
+        : detection.status === "unknown"
+          ? "Unknown firmware"
+          : detection.status === "error"
+            ? "Detection stopped"
+            : detection.status === "detecting"
+              ? "Reading firmware…"
+              : "Not checked";
+
+  return (
+    <section className={`firmware-detector detector-${detection.status}`} aria-label="Installed firmware detector" aria-live="polite">
+      <span className="detector-icon"><ScanSearch /></span>
+      <div className="detector-copy">
+        <small>CURRENT FIRMWARE</small>
+        <strong>{label}{detection.version ? ` · v${detection.version}` : ""}</strong>
+        <p>{detection.detail}</p>
+      </div>
+      <button onClick={onDetect} disabled={!compatible || disabled}>
+        {detection.status === "detecting" ? "Detecting…" : "Detect firmware"}
+      </button>
+      <div className="detector-progress" aria-hidden="true">
+        <span style={{ width: detection.status === "detecting" ? `${Math.round(progress * 100)}%` : "0%" }} />
+      </div>
+    </section>
+  );
+}
+
 function ConsolePane({
   state,
   phase,
@@ -413,7 +534,7 @@ function ConsolePane({
   catalogError: string | null;
 }) {
   const visibleLogs = logs.length ? logs.slice(-14) : ["Loading verified firmware catalog…"];
-  const stateClass = phase === "complete" ? "success" : phase === "error" || catalogError ? "error" : phase === "flashing" ? "active" : "";
+  const stateClass = phase === "complete" ? "success" : phase === "error" || catalogError ? "error" : phase === "flashing" || phase === "detecting" ? "active" : "";
 
   return (
     <section className="console-pane" aria-label="Flash console" aria-live="polite">
@@ -432,7 +553,7 @@ function ConsolePane({
         {visibleLogs.map((line, index) => (
           <code key={`${index}-${line}`}><span>›</span>{line}</code>
         ))}
-        {phase === "flashing" && <span className="console-cursor" />}
+        {(phase === "flashing" || phase === "detecting") && <span className="console-cursor" />}
       </div>
       <div className="console-foot">
         <span>USB / LOCAL</span>
