@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "npm run sync:firmware && vite",
-    "build": "npm run sync:firmware && tsc -b && vite build",
+    "build": "npm run sync:firmware && npm run build:app",
+    "build:app": "tsc -b && vite build",
     "preview": "vite preview",
     "preview:worker": "npm run build && wrangler dev",
     "sync:firmware": "node scripts/sync-firmware.mjs",
     "test": "vitest run",
+    "test:ci": "npm run sync:firmware && npm test",
     "lint": "eslint .",
     "deploy": "npm run build && wrangler deploy"
   },

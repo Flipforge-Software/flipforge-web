@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, inflateRawSync } from "node:zlib";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputRoot = resolve(projectRoot, "public", "firmware");
@@ -43,6 +43,104 @@ function extractTarGz(archive) {
     offset = contentStart + Math.ceil(size / 512) * 512;
   }
   return files;
+}
+
+function openZip(archive) {
+  const endOfCentralDirectorySignature = 0x06054b50;
+  const centralDirectorySignature = 0x02014b50;
+  const localFileSignature = 0x04034b50;
+  const minimumEndOffset = Math.max(0, archive.length - 65_557);
+  let endOffset = -1;
+  for (let offset = archive.length - 22; offset >= minimumEndOffset; offset -= 1) {
+    if (archive.readUInt32LE(offset) === endOfCentralDirectorySignature) {
+      endOffset = offset;
+      break;
+    }
+  }
+  if (endOffset < 0) throw new Error("Marauder installer archive is not a valid ZIP file.");
+
+  const diskNumber = archive.readUInt16LE(endOffset + 4);
+  const centralDirectoryDisk = archive.readUInt16LE(endOffset + 6);
+  const diskEntryCount = archive.readUInt16LE(endOffset + 8);
+  const entryCount = archive.readUInt16LE(endOffset + 10);
+  const centralDirectorySize = archive.readUInt32LE(endOffset + 12);
+  const centralDirectoryOffset = archive.readUInt32LE(endOffset + 16);
+  if (
+    diskNumber !== 0 ||
+    centralDirectoryDisk !== 0 ||
+    diskEntryCount !== entryCount ||
+    entryCount === 0xffff ||
+    centralDirectoryOffset + centralDirectorySize > endOffset
+  ) {
+    throw new Error("Marauder installer archive uses an unsupported ZIP layout.");
+  }
+
+  const entries = new Map();
+  let offset = centralDirectoryOffset;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (offset + 46 > archive.length || archive.readUInt32LE(offset) !== centralDirectorySignature) {
+      throw new Error("Marauder installer archive has a malformed central directory.");
+    }
+    const flags = archive.readUInt16LE(offset + 8);
+    const method = archive.readUInt16LE(offset + 10);
+    const compressedSize = archive.readUInt32LE(offset + 20);
+    const uncompressedSize = archive.readUInt32LE(offset + 24);
+    const nameLength = archive.readUInt16LE(offset + 28);
+    const extraLength = archive.readUInt16LE(offset + 30);
+    const commentLength = archive.readUInt16LE(offset + 32);
+    const localHeaderOffset = archive.readUInt32LE(offset + 42);
+    const nextOffset = offset + 46 + nameLength + extraLength + commentLength;
+    if (
+      nextOffset > archive.length ||
+      (flags & 0x1) !== 0 ||
+      ![0, 8].includes(method) ||
+      compressedSize === 0xffffffff ||
+      uncompressedSize === 0xffffffff ||
+      localHeaderOffset === 0xffffffff
+    ) {
+      throw new Error("Marauder installer archive contains an unsupported ZIP entry.");
+    }
+    const name = archive.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+    if (entries.has(name)) throw new Error(`Marauder installer archive contains duplicate entry: ${name}`);
+    entries.set(name, { compressedSize, uncompressedSize, method, localHeaderOffset });
+    offset = nextOffset;
+  }
+  if (offset !== centralDirectoryOffset + centralDirectorySize) {
+    throw new Error("Marauder installer archive central directory size is invalid.");
+  }
+
+  return {
+    read(name, expectedSize, maximumSize = expectedSize) {
+      const entry = entries.get(name);
+      if (!entry) throw new Error(`Marauder installer archive is missing: ${name}`);
+      if (
+        (expectedSize !== undefined && (!Number.isSafeInteger(expectedSize) || expectedSize < 0)) ||
+        (expectedSize !== undefined && entry.uncompressedSize !== expectedSize) ||
+        !Number.isSafeInteger(maximumSize) ||
+        maximumSize < 0 ||
+        entry.uncompressedSize > maximumSize
+      ) {
+        throw new Error(`Marauder installer archive has an invalid entry size: ${name}`);
+      }
+      const localOffset = entry.localHeaderOffset;
+      if (localOffset + 30 > archive.length || archive.readUInt32LE(localOffset) !== localFileSignature) {
+        throw new Error(`Marauder installer archive has an invalid local header: ${name}`);
+      }
+      const localNameLength = archive.readUInt16LE(localOffset + 26);
+      const localExtraLength = archive.readUInt16LE(localOffset + 28);
+      const contentStart = localOffset + 30 + localNameLength + localExtraLength;
+      const contentEnd = contentStart + entry.compressedSize;
+      if (contentEnd > archive.length) throw new Error(`Marauder installer archive entry is truncated: ${name}`);
+      const compressed = archive.subarray(contentStart, contentEnd);
+      const bytes = entry.method === 0
+        ? Buffer.from(compressed)
+        : inflateRawSync(compressed, { maxOutputLength: maximumSize });
+      if (bytes.length !== entry.uncompressedSize) {
+        throw new Error(`Marauder installer archive entry failed validation: ${name}`);
+      }
+      return bytes;
+    },
+  };
 }
 
 function safeVersion(value) {
@@ -142,9 +240,36 @@ async function loadMarauder() {
   const release = await (await fetchChecked(marauderReleaseUrl)).json();
   const version = safeVersion(String(release.tag_name ?? "").replace(/^v/, ""));
   const manifestAsset = release.assets?.find((asset) => asset.name === "firmware-manifest.json");
-  if (!manifestAsset) throw new Error("Marauder release is missing its firmware manifest.");
-  const manifestHash = publishedAssetHash(manifestAsset);
-  const manifestBytes = await downloadVerifiedReleaseAsset(manifestAsset, manifestHash, manifestAsset.size);
+  const installerArchiveAsset = release.assets?.find((asset) => asset.name === "marauder-installer-assets.zip");
+  let manifestBytes;
+  let sourceSha256;
+  let readSegment;
+  if (manifestAsset) {
+    sourceSha256 = publishedAssetHash(manifestAsset);
+    manifestBytes = await downloadVerifiedReleaseAsset(manifestAsset, sourceSha256, manifestAsset.size);
+    readSegment = async (segment) => {
+      const asset = release.assets?.find((candidate) => candidate.name === segment.fileName);
+      return downloadVerifiedReleaseAsset(asset, segment.sha256, segment.size);
+    };
+  } else if (installerArchiveAsset) {
+    sourceSha256 = publishedAssetHash(installerArchiveAsset);
+    const archive = await downloadVerifiedReleaseAsset(
+      installerArchiveAsset,
+      sourceSha256,
+      installerArchiveAsset.size,
+    );
+    const zip = openZip(archive);
+    manifestBytes = zip.read("firmware-manifest.json", undefined, 1_048_576);
+    readSegment = async (segment) => {
+      const bytes = zip.read(segment.fileName, segment.size);
+      if (sha256(bytes) !== segment.sha256) {
+        throw new Error(`Marauder installer archive segment failed verification: ${segment.fileName}`);
+      }
+      return bytes;
+    };
+  } else {
+    throw new Error("Marauder release is missing its firmware manifest and installer archive.");
+  }
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   const target = manifest.targets?.find((candidate) => candidate.id === "flipper-zero-wifi-dev-board");
   if (
@@ -184,10 +309,9 @@ async function loadMarauder() {
     if (!/^[a-f0-9]{64}$/.test(segment.sha256 ?? "") || !Number.isSafeInteger(segment.size) || segment.size <= 0) {
       throw new Error("Marauder firmware segment metadata is invalid.");
     }
-    const asset = release.assets?.find((candidate) => candidate.name === segment.fileName);
     files.push({
       ...config,
-      bytes: await downloadVerifiedReleaseAsset(asset, segment.sha256, segment.size),
+      bytes: await readSegment(segment),
     });
     seenRoles.add(segment.role);
   }
@@ -201,7 +325,7 @@ async function loadMarauder() {
     description: "Install Marauder tools for Wi-Fi hardware you own or are authorized to test.",
     sourceName: "ESP32 Marauder",
     sourceUrl: release.html_url,
-    archiveSha256: manifestHash,
+    archiveSha256: sourceSha256,
     appIdentitySha256,
     eraseAll: true,
     chip: "ESP32-S2",
